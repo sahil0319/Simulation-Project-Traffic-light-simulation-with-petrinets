@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# VS Code temp file
+tempCodeRunnerFile.py
+
+# Virtual environment (your venv is in the project root)
+bin/
+include/
+lib/
+pyvenv.cfg
+
+# Optional: if you ever create these
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets
+.env
+.env.*
