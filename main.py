@@ -22,6 +22,22 @@ WHITE = (230, 230, 230)
 YELLOW = (255, 220, 40)
 RED = (255, 60, 60)
 GREEN = (60, 255, 120)
+SIDEWALK = (85, 85, 85)
+
+
+def draw_sidewalk():
+    # Sidewalks (simple footpaths around the roads)
+    pad = 25  # sidewalk thickness
+
+    # Top-left
+    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(0, 0, cx - road_width//2 - pad, cy - road_width//2 - pad))
+    # Top-right
+    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(cx + road_width//2 + pad, 0, W, cy - road_width//2 - pad))
+    # Bottom-left
+    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(0, cy + road_width//2 + pad, cx - road_width//2 - pad, H))
+    # Bottom-right
+    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(cx + road_width//2 + pad, cy + road_width//2 + pad, W, H))
+
 
 # --- Intersection geometry ---
 cx, cy = W // 2, H // 2
@@ -257,8 +273,12 @@ while running:
     
 
     screen.fill(BG)
+    
+    draw_sidewalk()
     # draw toggle button
     draw_toggle_button()
+    
+
 
     # draw compass
     draw_compass(W - 10, 10, radius=40)
