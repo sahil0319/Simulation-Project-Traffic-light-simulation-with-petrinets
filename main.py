@@ -1,17 +1,21 @@
 import pygame
 from sys import exit
-from autonomous_controller import AutonomousController
+from adaptive_controller import AdaptiveController
+from vehicle import VehicleManager
+from pedestrian import PedestrianManager, Pedestrian
+from game_modes import AutomaticMode, ManualSurvivalMode, ScenarioChallengeMode
+from metrics import Metrics
 
 pygame.init()
-# --- Font (use your .ttf path here) ---
-FONT_PATH = "font/Pixeltype.ttf"   # <-- change this to your font file path
-ui_font = pygame.font.Font(FONT_PATH, 30)
 
+# --- Font ---
+FONT_PATH = "font/Pixeltype.ttf" 
+ui_font = pygame.font.Font(FONT_PATH, 30)
 
 # --- Window ---
 W, H = 1000, 700
 screen = pygame.display.set_mode((W, H))
-pygame.display.set_caption("Intersection Layout (Step 2)")
+pygame.display.set_caption("Petri Net Traffic Controller")
 clock = pygame.time.Clock()
 
 # --- Colors ---
@@ -24,100 +28,98 @@ RED = (255, 60, 60)
 GREEN = (60, 255, 120)
 SIDEWALK = (85, 85, 85)
 
-
-def draw_sidewalk():
-    # Sidewalks (simple footpaths around the roads)
-    pad = 25  # sidewalk thickness
-
-    # Top-left
-    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(0, 0, cx - road_width//2 - pad, cy - road_width//2 - pad))
-    # Top-right
-    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(cx + road_width//2 + pad, 0, W, cy - road_width//2 - pad))
-    # Bottom-left
-    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(0, cy + road_width//2 + pad, cx - road_width//2 - pad, H))
-    # Bottom-right
-    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(cx + road_width//2 + pad, cy + road_width//2 + pad, W, H))
-
-
 # --- Intersection geometry ---
 cx, cy = W // 2, H // 2
 road_width = 220
-cross_size = 260  # size of the central intersection box
+cross_size = 260 
 
-# Road rectangles (plus shape)
 vertical_road = pygame.Rect(cx - road_width // 2, 0, road_width, H)
 horizontal_road = pygame.Rect(0, cy - road_width // 2, W, road_width)
-
-# Central intersection box
 intersection = pygame.Rect(cx - cross_size // 2, cy - cross_size // 2, cross_size, cross_size)
 
+# --- Road Info for Vehicles ---
+# N=Southbound (Top->Bottom), S=Northbound (Bottom->Top), E=Westbound (Right->Left), W=Eastbound (Left->Right)
+# (Based on standard RHT)
+# N Lane: x < cx. S Lane: x > cx.
+# W Lane (Eastbound): y > cy. E Lane (Westbound): y < cy.
 
-# --- Traffic poles (each has its own state) ---
-light_states = ["red", "red_yellow", "green", "yellow"]
+# Starts
+start_N = (cx - road_width // 4, -60)
+start_S = (cx + road_width // 4, H + 60)
+start_E = (W + 60, cy - road_width // 4) 
+start_W = (-60, cy + road_width // 4)
 
-selected_pole = None
+# Stop Lines (Approximate Y or X values)
+# N stop Y: intersection top
+stop_y_N = intersection.top - 20
+stop_y_S = intersection.bottom + 20
+stop_x_W = intersection.left - 20
+stop_x_E = intersection.right + 20
 
+road_info = {
+    "starts": {"N": start_N, "S": start_S, "E": start_E, "W": start_W},
+    "stop_lines": {"N": stop_y_N, "S": stop_y_S, "E": stop_x_E, "W": stop_x_W}
+}
+
+# --- Traffic Poles ---
+# 0: NW, 1: NE, 2: SE, 3: SW
 poles = [
     {"name": "NW", "pos": (intersection.left - 35, intersection.top - 80), "state": "red"},
     {"name": "NE", "pos": (intersection.right + 35, intersection.top - 80), "state": "red"},
     {"name": "SW", "pos": (intersection.left - 35, intersection.bottom + 20), "state": "red"},
     {"name": "SE", "pos": (intersection.right + 35, intersection.bottom + 20), "state": "red"},
 ]
-name_to_index = {pole["name"]: i for i, pole in enumerate(poles)}
+# Map Approach Direction to Pole Index
+# N (Southbound) looks at NW pole? Or NE?
+# Typically N approaches from top, sees light on FAR RIGHT (SW) or NEAR RIGHT (NW).
+# Let's map: 
+# N traffic (from top) -> Looks at NW signal (idx 0) 
+# E traffic (from right) -> Looks at NE signal (idx 1)
+# S traffic (from bottom) -> Looks at SE signal (idx 3)
+# W traffic (from left) -> Looks at SW signal (idx 2)
+# Wait, this matches the previous code's mapping logic roughly?
+# "N": name_to_index["NW"] (0)
+# "E": name_to_index["NE"] (1)
+# "S": name_to_index["SE"] (3)
+# "W": name_to_index["SW"] (2)
 
-# Map your 4 drawn poles to 4 approaches (clockwise)
-# You can change this mapping later if you move pole positions.
-approach_pole = {
-    "N": name_to_index["NW"],
-    "E": name_to_index["NE"],
-    "S": name_to_index["SE"],
-    "W": name_to_index["SW"],
-}
+approach_map = {"N": 0, "E": 1, "S": 3, "W": 2}
 
+# --- Managers ---
+vehicle_manager = VehicleManager(road_info)
+pedestrian_manager = PedestrianManager(road_info)
+controller = AdaptiveController(poles, approach_map)
+metrics = Metrics()
 
-def move_selection_wasd(curr_idx, key):
-    if curr_idx is None:
-        return curr_idx
-    name = poles[curr_idx]["name"]
-    
-    if key == pygame.K_w:
-        if name == "SE": return name_to_index["NE"]
-        if name == "SW": return name_to_index["NW"]
-        return curr_idx
-    if key == pygame.K_s:  # go south
-        if name == "NW": return name_to_index["SW"]
-        if name == "NE": return name_to_index["SE"]
-        return curr_idx  # already bottom row
+# --- Modes ---
+modes = [
+    AutomaticMode(controller, vehicle_manager),
+    ManualSurvivalMode(controller, vehicle_manager),
+    ScenarioChallengeMode(controller, vehicle_manager)
+]
+current_mode_idx = 0
 
-    if key == pygame.K_a:  # go west
-        if name == "NE": return name_to_index["NW"]
-        if name == "SE": return name_to_index["SW"]
-        return curr_idx  # already left column
+# --- Selected Pole (Manual Only) ---
+selected_pole = None
 
-    if key == pygame.K_d:  # go east
-        if name == "NW": return name_to_index["NE"]
-        if name == "SW": return name_to_index["SE"]
-        return curr_idx  # already right column
+# --- Drawing Helpers ---
+def draw_sidewalk():
+    pad = 25
+    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(0, 0, cx - road_width//2 - pad, cy - road_width//2 - pad))
+    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(cx + road_width//2 + pad, 0, W, cy - road_width//2 - pad))
+    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(0, cy + road_width//2 + pad, cx - road_width//2 - pad, H))
+    pygame.draw.rect(screen, SIDEWALK, pygame.Rect(cx + road_width//2 + pad, cy + road_width//2 + pad, W, H))
 
-    return curr_idx
-    
-    
-    
-def pole_hitbox(pole):
-    x, y = pole["pos"]
-    # clickable area around the traffic pole
-    return pygame.Rect(x - 20, y - 20, 40, 110)
+def draw_light(x, y, state="red"):
+    pygame.draw.rect(screen, (40, 40, 40), (x - 12, y - 12, 24, 60), border_radius=6)
+    r = 7
+    red_on = state in ("red", "red_yellow")
+    yellow_on = state in ("yellow", "red_yellow")
+    green_on = state == "green"
+    pygame.draw.circle(screen, RED if red_on else (70,70,70), (x, y), r)
+    pygame.draw.circle(screen, YELLOW if yellow_on else (70,70,70), (x, y + 18), r)
+    pygame.draw.circle(screen, GREEN if green_on else (70,70,70), (x, y + 36), r)
 
-# Stop line positions (near the intersection edges)
-stop_line_thickness = 8
-stop_line_len = road_width - 40
-
-stop_N = pygame.Rect(cx - stop_line_len // 2, intersection.top - 20, stop_line_len, stop_line_thickness)
-stop_S = pygame.Rect(cx - stop_line_len // 2, intersection.bottom + 12, stop_line_len, stop_line_thickness)
-stop_W = pygame.Rect(intersection.left - 20, cy - stop_line_len // 2, stop_line_thickness, stop_line_len)
-stop_E = pygame.Rect(intersection.right + 12, cy - stop_line_len // 2, stop_line_thickness, stop_line_len)
-
-# Crosswalks (simple zebra stripes)
 def draw_crosswalk_horizontal(y, x_start, x_end, stripe_w=10, gap=8):
     x = x_start
     while x < x_end:
@@ -130,206 +132,152 @@ def draw_crosswalk_vertical(x, y_start, y_end, stripe_h=10, gap=8):
         pygame.draw.rect(screen, WHITE, (x, y, 30, stripe_h))
         y += stripe_h + gap
 
-# Traffic light drawing (placeholder circles)
-def draw_light(x, y, state="red"):
-    # pole + box
-    pygame.draw.rect(screen, (40, 40, 40), (x - 12, y - 12, 24, 60), border_radius=6)
-    pygame.draw.rect(screen, (35, 35, 35), (x - 3, y + 48, 6, 40))
-
-    # lights
+def draw_ui():
+    mode_name = modes[current_mode_idx].name
+    lbl = ui_font.render(f"Mode: {mode_name} (Press M to switch)", True, WHITE)
+    screen.blit(lbl, (20, 20))
     
-    off = (70, 70, 70)
-    r = 7
-    
-    red_on = state in ("red", "red_yellow")
-    yellow_on = state in ("yellow", "red_yellow")
-    green_on = state == "green"
+    if selected_pole is not None:
+        p = poles[selected_pole]
+        txt = ui_font.render(f"Selected: {p['name']} ({p['state']})", True, YELLOW)
+        screen.blit(txt, (20, 50))
 
-    # top/mid/bottom circles
-    pygame.draw.circle(screen, RED if red_on else off, (x, y), r)
-    pygame.draw.circle(screen, YELLOW if yellow_on else off, (x, y + 18), r)
-    pygame.draw.circle(screen, GREEN if green_on else off, (x, y + 36), r)
-
-# Center lane lines (optional)
-def draw_lane_lines():
-    # vertical lane divider
-    pygame.draw.line(screen, LANE, (cx, 0), (cx, H), 2)
-    # horizontal lane divider
-    pygame.draw.line(screen, LANE, (0, cy), (W, cy), 2)
-    
-def draw_compass(top_right_x, top_right_y, radius=40):
-    """
-    Draws a simple compass at the top-right corner.
-    (top_right_x, top_right_y) is the top-right anchor point.
-    """
-    # center of compass
-    cx_c = top_right_x - radius - 10
-    cy_c = top_right_y + radius + 10
-
-    # circle
-    pygame.draw.circle(screen, (200, 200, 200), (cx_c, cy_c), radius, 2)
-
-    # cross lines
-    pygame.draw.line(screen, (200, 200, 200), (cx_c, cy_c - radius + 6), (cx_c, cy_c + radius - 6), 2)
-    pygame.draw.line(screen, (200, 200, 200), (cx_c - radius + 6, cy_c), (cx_c + radius - 6, cy_c), 2)
-
-    # direction labels
-    font_c = pygame.font.SysFont(None, 22)
-    n = font_c.render("N", True, (230, 230, 230))
-    s = font_c.render("S", True, (230, 230, 230))
-    e = font_c.render("E", True, (230, 230, 230))
-    w = font_c.render("W", True, (230, 230, 230))
-
-    screen.blit(n, (cx_c - n.get_width() // 2, cy_c - radius - 18))
-    screen.blit(s, (cx_c - s.get_width() // 2, cy_c + radius + 2))
-    screen.blit(e, (cx_c + radius + 6, cy_c - e.get_height() // 2))
-    screen.blit(w, (cx_c - radius - w.get_width() - 6, cy_c - w.get_height() // 2))
-
-
-mode = {"autonomas": 0, "play": 1}
-curr_mode = mode["autonomas"]
-
-# ---------------- AUTONOMOUS CONTROLLER ----------------
-auto_controller = AutonomousController(poles, approach_pole)
-
-
-# --- Toggle button (top-left) ---
-toggle_rect = pygame.Rect(20, 20, 170, 42)
-
-def mode_name(curr_mode_value):
-    # reverse lookup: 0 -> autonomas, 1 -> play
-    for k, v in mode.items():
-        if v == curr_mode_value:
-            return k
-    return "unknown"
-
-def draw_toggle_button():
-    # hover effect
-    mx, my = pygame.mouse.get_pos()
-    hover = toggle_rect.collidepoint(mx, my)
-
-    bg = (70, 70, 70) if not hover else (95, 95, 95)
-    border = (230, 230, 230)
-
-    pygame.draw.rect(screen, bg, toggle_rect, border_radius=10)
-    pygame.draw.rect(screen, border, toggle_rect, 2, border_radius=10)
-
-    label = f"Mode: {mode_name(curr_mode)}"
-    text_surf = ui_font.render(label, False, (240, 240, 240))
-    screen.blit(
-        text_surf,
-        (toggle_rect.x + 12, toggle_rect.y + (toggle_rect.height - text_surf.get_height()) // 2)
-    )
-
-
-
-# --- Main loop ---
+# --- Main Loop ---
 running = True
-
-
-
-
 while running:
+    dt = clock.tick(60) / 1000.0
+    
+    # Event Handling
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
             exit()
-
-        # Click to select a pole
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            mx, my = event.pos
-            selected_pole = None
-
-            # toggle button click
-            if toggle_rect.collidepoint(event.pos):
-                curr_mode = mode["play"] if curr_mode == mode["autonomas"] else mode["autonomas"]
-
-            # select poles only in play mode
-            if curr_mode == mode["play"]:
-                for i, pole in enumerate(poles):
-                    if pole_hitbox(pole).collidepoint(mx, my):
-                        selected_pole = i
-                        break
-
-        
-        # if a traffic pole is selected, navigate others with wasd
-      
-                
-        # SPACE changes only the selected pole
-        if event.type == pygame.KEYDOWN and curr_mode == mode["play"]:
-            if selected_pole is not None and event.key in (pygame.K_w, pygame.K_a, pygame.K_s, pygame.K_d):
-                selected_pole = move_selection_wasd(selected_pole, event.key)
-
+            
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_m:
+                current_mode_idx = (current_mode_idx + 1) % len(modes)
+                metrics = Metrics()
+            
+                metrics = Metrics()
+            
+            modes[current_mode_idx].handle_input(event, selected_pole)
+            
             if event.key == pygame.K_ESCAPE:
                 selected_pole = None
 
-            if event.key == pygame.K_SPACE and selected_pole is not None:
-                cur = poles[selected_pole]["state"]
-                nxt = light_states[(light_states.index(cur) + 1) % len(light_states)]
-                poles[selected_pole]["state"] = nxt
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            mx, my = event.pos
+            for i, p in enumerate(poles):
+                rect = pygame.Rect(p["pos"][0]-20, p["pos"][1]-20, 40, 110)
+                if rect.collidepoint(mx, my):
+                    selected_pole = i
 
-            
-
+    # Update
+    current_mode = modes[current_mode_idx]
+    current_mode.update(dt)
+    metrics.update(vehicle_manager)
     
-
+    # Draw
     screen.fill(BG)
-    
     draw_sidewalk()
-    # draw toggle button
-    draw_toggle_button()
     
-
-
-    # draw compass
-    draw_compass(W - 10, 10, radius=40)
-
     # Draw roads
     pygame.draw.rect(screen, ROAD, vertical_road)
     pygame.draw.rect(screen, ROAD, horizontal_road)
-
-    # Draw intersection box (slightly darker)
     pygame.draw.rect(screen, (45, 45, 45), intersection)
+    
+    # --- Road Markings ---
+    
+    # helper for double yellow
+    def draw_double_yellow(start_pos, end_pos):
+        # We'll expect vertical or horizontal lines
+        # Draw two lines 4px apart, centered on the abstract line
+        if start_pos[0] == end_pos[0]: # Vertical
+            x = start_pos[0]
+            pygame.draw.line(screen, YELLOW, (x - 3, start_pos[1]), (x - 3, end_pos[1]), 3)
+            pygame.draw.line(screen, YELLOW, (x + 3, start_pos[1]), (x + 3, end_pos[1]), 3)
+        else: # Horizontal
+            y = start_pos[1]
+            pygame.draw.line(screen, YELLOW, (start_pos[0], y - 3), (end_pos[0], y - 3), 3)
+            pygame.draw.line(screen, YELLOW, (start_pos[0], y + 3), (end_pos[0], y + 3), 3)
 
-    # Lane lines (optional helper)
-    draw_lane_lines()
+    # helper for dashed white
+    def draw_dashed_white(start_pos, end_pos):
+        if start_pos[0] == end_pos[0]: # Vertical
+            x = start_pos[0]
+            for y in range(int(start_pos[1]), int(end_pos[1]), 40):
+                pygame.draw.line(screen, WHITE, (x, y), (x, min(y + 20, end_pos[1])), 2)
+        else: # Horizontal
+            y = start_pos[1]
+            for x in range(int(start_pos[0]), int(end_pos[0]), 40):
+                pygame.draw.line(screen, WHITE, (x, y), (min(x + 20, end_pos[0]), y), 2)
 
-    # Stop lines
-    pygame.draw.rect(screen, WHITE, stop_N)
-    pygame.draw.rect(screen, WHITE, stop_S)
-    pygame.draw.rect(screen, WHITE, stop_W)
-    pygame.draw.rect(screen, WHITE, stop_E)
+    # 1. Double Yellow Center Lines
+    draw_double_yellow((cx, 0), (cx, cy - cross_size//2)) # Top
+    draw_double_yellow((cx, cy + cross_size//2), (cx, H)) # Bottom
+    draw_double_yellow((0, cy), (cx - cross_size//2, cy)) # Left
+    draw_double_yellow((cx + cross_size//2, cy), (W, cy)) # Right
 
-    # Crosswalks (one across NS road, one across EW road)
-    # Across NS road => horizontal stripes above and below intersection
+    # 2. Lane Dividers (Dashed White) - separating Lane 1 (Inner) and Lane 2 (Outer)
+    # Road Width 220. Center cx. Half 110. Lanes roughly 55 wide.
+    # Divider is at cx +/- 55.
+    
+    # Vertical Road
+    draw_dashed_white((cx - 55, 0), (cx - 55, cy - cross_size//2)) # Top Left (N-bound Incoming)
+    draw_dashed_white((cx + 55, 0), (cx + 55, cy - cross_size//2)) # Top Right (N-bound Outgoing)
+    
+    draw_dashed_white((cx - 55, cy + cross_size//2), (cx - 55, H)) # Bottom Left (S-bound Outgoing)
+    draw_dashed_white((cx + 55, cy + cross_size//2), (cx + 55, H)) # Bottom Right (S-bound Incoming)
+
+    # Horizontal Road
+    draw_dashed_white((0, cy - 55), (cx - cross_size//2, cy - 55)) # Left Top (W-bound Outgoing)
+    draw_dashed_white((0, cy + 55), (cx - cross_size//2, cy + 55)) # Left Bottom (W-bound Incoming)
+    
+    draw_dashed_white((cx + cross_size//2, cy - 55), (W, cy - 55)) # Right Top (E-bound Incoming)
+    draw_dashed_white((cx + cross_size//2, cy + 55), (W, cy + 55)) # Right Bottom (E-bound Outgoing)
+
+    # 3. Shoulder Lines (Solid White) at Road Edges
+    # Edges at cx +/- 110
+    
+    # Vertical
+    pygame.draw.line(screen, WHITE, (cx - 110, 0), (cx - 110, cy - cross_size//2), 3) # Top Left Edge
+    pygame.draw.line(screen, WHITE, (cx + 110, 0), (cx + 110, cy - cross_size//2), 3) # Top Right Edge
+    pygame.draw.line(screen, WHITE, (cx - 110, cy + cross_size//2), (cx - 110, H), 3) # Bottom Left Edge
+    pygame.draw.line(screen, WHITE, (cx + 110, cy + cross_size//2), (cx + 110, H), 3) # Bottom Right Edge
+    
+    # Horizontal
+    pygame.draw.line(screen, WHITE, (0, cy - 110), (cx - cross_size//2, cy - 110), 3) # Left Top Edge
+    pygame.draw.line(screen, WHITE, (0, cy + 110), (cx - cross_size//2, cy + 110), 3) # Left Bottom Edge
+    pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy - 110), (W, cy - 110), 3) # Right Top Edge
+    pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy + 110), (W, cy + 110), 3) # Right Bottom Edge
+    
+    # Crosswalks (Restored stripes)
     draw_crosswalk_horizontal(intersection.top - 55, cx - road_width // 2 + 20, cx + road_width // 2 - 20)
     draw_crosswalk_horizontal(intersection.bottom + 25, cx - road_width // 2 + 20, cx + road_width // 2 - 20)
-
-    # Across EW road => vertical stripes left and right of intersection
     draw_crosswalk_vertical(intersection.left - 55, cy - road_width // 2 + 20, cy + road_width // 2 - 20)
     draw_crosswalk_vertical(intersection.right + 25, cy - road_width // 2 + 20, cy + road_width // 2 - 20)
 
-    # Traffic lights (4 corners near intersection)
-    for i, pole in enumerate(poles):
-        x, y = pole["pos"]
-        draw_light(x,y, pole["state"])
-        
-        if selected_pole == i:
-            pygame.draw.rect(screen, WHITE, pole_hitbox(pole), 2, border_radius=6)
-       
+    # Stop lines (Restored relative dimensions)
+    stop_len = road_width - 40
+    pygame.draw.rect(screen, WHITE, pygame.Rect(cx - stop_len//2, stop_y_N, stop_len, 8))
+    pygame.draw.rect(screen, WHITE, pygame.Rect(cx - stop_len//2, stop_y_S, stop_len, 8))
+    pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_W, cy - stop_len//2, 8, stop_len))
+    pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_E, cy - stop_len//2, 8, stop_len))
 
-    # # Small instruction text
-    # font = pygame.font.SysFont(None, 28)
-    # txt = font.render("Step 2: Intersection drawing only | Press SPACE to change light color", True, (220, 220, 220))
-    # screen.blit(txt, (20, 20))
+    # Entities
+    vehicle_manager.draw(screen)
+    pedestrian_manager.draw(screen)
+
+    # Traffic Lights
+    for i, p in enumerate(poles):
+        draw_light(p["pos"][0], p["pos"][1], p["state"])
+        if selected_pole == i:
+             pygame.draw.rect(screen, WHITE, (p["pos"][0]-20, p["pos"][1]-20, 40, 110), 2)
+
+    # UI
+    draw_ui()
+    metrics.draw(screen, ui_font)
 
     pygame.display.flip()
-    dt = clock.tick(60) / 1000.0
-    # If autonomas mode: controller decides light states (no manual editing)
-    if curr_mode == mode["autonomas"]:
-        selected_pole = None  # disable manual selection in autonomous mode
-        auto_controller.update(dt)
-        auto_controller.apply_states()
-
-
 
 pygame.quit()
