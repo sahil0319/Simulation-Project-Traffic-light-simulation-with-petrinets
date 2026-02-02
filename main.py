@@ -1,3 +1,5 @@
+# main.py
+
 import pygame
 from sys import exit
 from adaptive_controller import AdaptiveController
@@ -89,6 +91,7 @@ approach_map = {"N": 0, "E": 1, "S": 3, "W": 2}
 vehicle_manager = VehicleManager(road_info)
 pedestrian_manager = PedestrianManager(road_info)
 controller = AdaptiveController(poles, approach_map)
+controller.apply_states()
 metrics = Metrics()
 
 # --- Modes ---
@@ -160,7 +163,9 @@ while running:
             
                 metrics = Metrics()
             
-            modes[current_mode_idx].handle_input(event, selected_pole)
+            new_selection = modes[current_mode_idx].handle_input(event, selected_pole)
+            if new_selection is not None:
+                selected_pole = new_selection
             
             if event.key == pygame.K_ESCAPE:
                 selected_pole = None

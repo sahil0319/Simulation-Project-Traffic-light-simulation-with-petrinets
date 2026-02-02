@@ -1,3 +1,5 @@
+# game_modes.py
+
 import pygame
 
 class GameMode:
@@ -32,18 +34,23 @@ class AutomaticMode(GameMode):
         return res
 
 
+# game_modes.py
+
 class ManualSurvivalMode(GameMode):
     def __init__(self, controller, vehicle_manager):
         super().__init__(controller, vehicle_manager)
         self.name = "Manual Survival"
-        
+
     def update(self, dt):
-        # We do NOT call controller.update() logic for timing
+        # time passes, but controller does NOT auto-step
+        self.controller.advance_time(dt)
         self.vehicle_manager.update(dt, self.get_light_states())
 
     def handle_input(self, event, selected_pole=None):
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-            if selected_pole is not None:
+        if event.type == pygame.KEYDOWN:
+            # SPACE = "try advance the Petri net by one valid transition"
+            # (optional) require a selected pole so it feels like "I’m controlling"
+            if event.key == pygame.K_SPACE and selected_pole is not None:
                 # Map selected pole index back to direction
                 # approach_pole_map: {"N": 0, "S": 2, ...}
                 direction = None
@@ -53,9 +60,31 @@ class ManualSurvivalMode(GameMode):
                         break
                 
                 if direction:
-                    self.controller.force_phase(direction)
+                    # Check if ANY state in this direction is active
+                    states = self.controller.places[direction]
+                    if any(p.tokens > 0 for p in states.values()):
+                         self.controller.step_manual()
+                    else:
+                         self.controller.force_phase(direction)
 
-    # Reuse get_light_states from AutoMode
+            # WASD navigation
+            if selected_pole is not None:
+                # 0: NW, 1: NE, 2: SW, 3: SE
+                if event.key == pygame.K_w: # Up
+                    if selected_pole == 2: return 0
+                    if selected_pole == 3: return 1
+                elif event.key == pygame.K_s: # Down
+                    if selected_pole == 0: return 2
+                    if selected_pole == 1: return 3
+                elif event.key == pygame.K_a: # Left
+                    if selected_pole == 1: return 0
+                    if selected_pole == 3: return 2
+                elif event.key == pygame.K_d: # Right
+                    if selected_pole == 0: return 1
+                    if selected_pole == 2: return 3
+
+        return selected_pole
+
     get_light_states = AutomaticMode.get_light_states
 
 

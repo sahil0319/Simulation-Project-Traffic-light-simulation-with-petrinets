@@ -1,3 +1,5 @@
+# pedestrian.py
+
 import pygame
 import random
 

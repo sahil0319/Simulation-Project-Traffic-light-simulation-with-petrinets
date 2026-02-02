@@ -73,7 +73,9 @@ class Vehicle:
         
         self.id = vehicle_id
         self.approach = approach  # "N", "S", "E", "W" (where I am coming FROM)
+        self.road_info = road_info
         self.is_ambulance = is_ambulance
+        self.spawn_time = pygame.time.get_ticks() / 1000.0 # Track creation time
         
         if is_ambulance:
             self.type_name = "Ambulance"
@@ -167,7 +169,7 @@ class Vehicle:
         
         self.rect.center = (self.x, self.y)
 
-    def move(self, dt, vehicle_ahead, stop_line_pos, light_state):
+    def move(self, dt, vehicle_ahead, stop_line_pos, light_state, all_vehicles=None):
         target_speed = self.max_speed
         
         # Ambulance ignores red lights? Or just stops if blocked?
@@ -211,6 +213,28 @@ class Vehicle:
                 elif dist_to_vehicle < 100:
                     target_speed = min(target_speed, vehicle_ahead.speed)
 
+        # Cross-traffic collision avoidance (Ambulances)
+        if self.is_ambulance and all_vehicles:
+            # Define a safety box ahead
+            safety_dist = 100 # Increased from 80 to prevent visual clipping
+            box = None
+            if self.approach == "N": 
+                box = pygame.Rect(self.x - 15, self.y + self.length/2, 30, safety_dist)
+            elif self.approach == "S":
+                box = pygame.Rect(self.x - 15, self.y - self.length/2 - safety_dist, 30, safety_dist)
+            elif self.approach == "E":
+                box = pygame.Rect(self.x - self.length/2 - safety_dist, self.y - 15, safety_dist, 30)
+            elif self.approach == "W":
+                box = pygame.Rect(self.x + self.length/2, self.y - 15, safety_dist, 30)
+            
+            if box:
+                for other in all_vehicles:
+                    if other is self: continue
+                    if box.colliderect(other.rect):
+                        target_speed = 0
+                        self.speed = 0 # Instant emergency brake to avoid clipping
+                        break
+
         # Light logic
         # 1. Ambulances ALWAYS ignore lights (Preemption)
         # 2. Normal cars respect light_state (which manager will force to Red if ambulance is near)
@@ -233,9 +257,14 @@ class Vehicle:
                 dist_to_line = stop_line_pos - self.x
                 if self.x > stop_line_pos: crossed = True
 
-            if not crossed and dist_to_line > 0 and dist_to_line < 150:
-                if light_state in ["red", "red_yellow", "yellow"]:
-                     should_stop = True
+            if not crossed and dist_to_line > 0 and dist_to_line < 220:
+                if light_state == "yellow":
+                    target_speed = min(target_speed, self.max_speed * 0.45)
+                    # Stop unless we are too fast and close (Dilemma Zone)
+                    if not (dist_to_line < 50 and self.speed > self.max_speed * 0.5):
+                        should_stop = True
+                elif light_state in ["red", "red_yellow"]:
+                    should_stop = True
             
             if should_stop:
                 if dist_to_line < 25:
@@ -285,6 +314,20 @@ class VehicleManager:
         self.spawn_timer = 0.5 # Start fast
         self.next_id = 0
 
+    def get_lane_info(self, direction):
+        """Returns (queue_length, max_wait_time) for the given lane."""
+        lane = self.vehicles[direction]
+        if not lane:
+            return 0, 0
+            
+        queue_length = len(lane)
+        
+        # Max wait time is current time - spawn time of the OLDEST car (index 0)
+        current_time = pygame.time.get_ticks() / 1000.0
+        max_wait = current_time - lane[0].spawn_time
+        
+        return queue_length, max_wait
+
     def update(self, dt, light_states):
         self.spawn_timer -= dt
         if self.spawn_timer <= 0:
@@ -296,29 +339,15 @@ class VehicleManager:
             self.spawn_vehicle(direction, is_ambulance)
             self.spawn_timer = random.uniform(1.2, 3.0) 
 
-        # Step 1: Detect active Ambulances approaching intersections
-        emergency_override = False
-        for lane in self.vehicles.values():
-            for v in lane:
-                if v.is_ambulance:
-                    # Check distance to intersection (rough)
-                    # Center is (0,0) relative to start if we normalize, but here world coords.
-                    # Intersection stops are around (cx-100, cy-100)...
-                    # Only override if it's somewhat close or active, not just spawned far away?
-                    # Let's say if it exists, SAFETY FIRST -> All stop.
-                    emergency_override = True
-                    break
-            if emergency_override: break
-
         for direction, lane_vehicles in self.vehicles.items():
             stop_line = self.road_info["stop_lines"][direction]
             
-            # If emergency, FORCE RED for normal cars
-            if emergency_override:
-                light = "red" 
-            else:
-                light = light_states.get(direction, "red") 
+            # Normal light logic (no global override)
+            light = light_states.get(direction, "red") 
             
+            # Flatten list of all vehicles for cross-checking
+            all_vehicles_list = [v for l in self.vehicles.values() for v in l]
+
             # Filter out distant vehicles
             active_vehicles = []
             for i, vehicle in enumerate(lane_vehicles):
@@ -342,7 +371,7 @@ class VehicleManager:
                         vehicle_ahead = other
                         break
                 
-                vehicle.move(dt, vehicle_ahead, stop_line, light)
+                vehicle.move(dt, vehicle_ahead, stop_line, light, all_vehicles=all_vehicles_list)
                 
                 # Check bounds (keep if within reasonable area)
                 # W=1000, H=700
