@@ -27,7 +27,7 @@ class Pedestrian:
         """
         crossing_type: "horizontal_top", "horizontal_bottom", "vertical_left", "vertical_right"
         direction: "positive" or "negative"
-        geometry: dict with cx, cy, road_width, cross_size
+        geometry: dict with cx, cy, road_width, cross_size, screen_width, screen_height
         """
         self.crossing_type = crossing_type
         self.direction = direction
@@ -37,31 +37,37 @@ class Pedestrian:
         cy = geometry["cy"]
         road_w = geometry["road_width"]
         cross_s = geometry["cross_size"]
+        screen_w = geometry.get("screen_width", 1000)
+        screen_h = geometry.get("screen_height", 700)
         
-        # Waypoints: [spawn, curb_wait, cross_end, destination]
-        # Pedestrian spawns on sidewalk, walks to curb, waits for safe signal,
-        # then crosses the full road, and walks onto the opposite sidewalk.
+        # Waypoints: [spawn_edge, sidewalk_approach, curb_wait, cross_end, sidewalk_exit, dest_edge]
+        # Pedestrian spawns at screen edge, walks along sidewalk to crosswalk,
+        # waits for safe signal, crosses, then walks to opposite screen edge.
         
-        sidewalk_offset = 45  # Distance from road edge to spawn on sidewalk
         curb_margin = 5       # Stop just before the road edge
-        
         crosswalk_offset = 40  # Crosswalk distance from intersection edge
+        sidewalk_offset = 45   # Distance from road edge on the sidewalk side
+        edge_margin = -50      # Spawn slightly off screen
         
         if crossing_type == "horizontal_top":  # Crosses top of vertical road (NW <-> NE)
             y_cross = cy - cross_s // 2 - crosswalk_offset
             if direction == "positive":  # West to East
                 self.waypoints = [
-                    (cx - road_w // 2 - sidewalk_offset, y_cross),   # Spawn on NW sidewalk
-                    (cx - road_w // 2 - curb_margin, y_cross),       # Wait at west curb
-                    (cx + road_w // 2 + curb_margin, y_cross),       # Reach east curb
-                    (cx + road_w // 2 + sidewalk_offset, y_cross),   # Walk onto NE sidewalk
+                    (edge_margin, y_cross),                                 # Spawn at left screen edge
+                    (cx - road_w // 2 - sidewalk_offset, y_cross),          # Walk along sidewalk
+                    (cx - road_w // 2 - curb_margin, y_cross),              # Wait at west curb
+                    (cx + road_w // 2 + curb_margin, y_cross),              # Reach east curb
+                    (cx + road_w // 2 + sidewalk_offset, y_cross),          # Walk onto NE sidewalk
+                    (screen_w + abs(edge_margin), y_cross),                 # Walk to right screen edge
                 ]
             else:  # East to West
                 self.waypoints = [
+                    (screen_w + abs(edge_margin), y_cross),
                     (cx + road_w // 2 + sidewalk_offset, y_cross),
                     (cx + road_w // 2 + curb_margin, y_cross),
                     (cx - road_w // 2 - curb_margin, y_cross),
                     (cx - road_w // 2 - sidewalk_offset, y_cross),
+                    (edge_margin, y_cross),
                 ]
             self.check_directions = ["N", "S"]  # Check vertical traffic lights
             self.crossing_axis = "horizontal"
@@ -69,22 +75,27 @@ class Pedestrian:
             self.road_max = cx + road_w // 2
             self.cross_y = y_cross
             self.cross_x = None
+            self.curb_waypoint_idx = 2  # Index of curb wait waypoint
             
         elif crossing_type == "horizontal_bottom":  # SW <-> SE
             y_cross = cy + cross_s // 2 + crosswalk_offset
             if direction == "positive":
                 self.waypoints = [
+                    (edge_margin, y_cross),
                     (cx - road_w // 2 - sidewalk_offset, y_cross),
                     (cx - road_w // 2 - curb_margin, y_cross),
                     (cx + road_w // 2 + curb_margin, y_cross),
                     (cx + road_w // 2 + sidewalk_offset, y_cross),
+                    (screen_w + abs(edge_margin), y_cross),
                 ]
             else:
                 self.waypoints = [
+                    (screen_w + abs(edge_margin), y_cross),
                     (cx + road_w // 2 + sidewalk_offset, y_cross),
                     (cx + road_w // 2 + curb_margin, y_cross),
                     (cx - road_w // 2 - curb_margin, y_cross),
                     (cx - road_w // 2 - sidewalk_offset, y_cross),
+                    (edge_margin, y_cross),
                 ]
             self.check_directions = ["N", "S"]
             self.crossing_axis = "horizontal"
@@ -92,22 +103,27 @@ class Pedestrian:
             self.road_max = cx + road_w // 2
             self.cross_y = y_cross
             self.cross_x = None
+            self.curb_waypoint_idx = 2
             
         elif crossing_type == "vertical_left":  # NW <-> SW
             x_cross = cx - cross_s // 2 - crosswalk_offset
             if direction == "positive":  # North to South
                 self.waypoints = [
+                    (x_cross, edge_margin),
                     (x_cross, cy - road_w // 2 - sidewalk_offset),
                     (x_cross, cy - road_w // 2 - curb_margin),
                     (x_cross, cy + road_w // 2 + curb_margin),
                     (x_cross, cy + road_w // 2 + sidewalk_offset),
+                    (x_cross, screen_h + abs(edge_margin)),
                 ]
             else:
                 self.waypoints = [
+                    (x_cross, screen_h + abs(edge_margin)),
                     (x_cross, cy + road_w // 2 + sidewalk_offset),
                     (x_cross, cy + road_w // 2 + curb_margin),
                     (x_cross, cy - road_w // 2 - curb_margin),
                     (x_cross, cy - road_w // 2 - sidewalk_offset),
+                    (x_cross, edge_margin),
                 ]
             self.check_directions = ["E", "W"]
             self.crossing_axis = "vertical"
@@ -115,22 +131,27 @@ class Pedestrian:
             self.road_max = cy + road_w // 2
             self.cross_x = x_cross
             self.cross_y = None
+            self.curb_waypoint_idx = 2
             
         elif crossing_type == "vertical_right":  # NE <-> SE
             x_cross = cx + cross_s // 2 + crosswalk_offset
             if direction == "positive":
                 self.waypoints = [
+                    (x_cross, edge_margin),
                     (x_cross, cy - road_w // 2 - sidewalk_offset),
                     (x_cross, cy - road_w // 2 - curb_margin),
                     (x_cross, cy + road_w // 2 + curb_margin),
                     (x_cross, cy + road_w // 2 + sidewalk_offset),
+                    (x_cross, screen_h + abs(edge_margin)),
                 ]
             else:
                 self.waypoints = [
+                    (x_cross, screen_h + abs(edge_margin)),
                     (x_cross, cy + road_w // 2 + sidewalk_offset),
                     (x_cross, cy + road_w // 2 + curb_margin),
                     (x_cross, cy - road_w // 2 - curb_margin),
                     (x_cross, cy - road_w // 2 - sidewalk_offset),
+                    (x_cross, edge_margin),
                 ]
             self.check_directions = ["E", "W"]
             self.crossing_axis = "vertical"
@@ -138,6 +159,7 @@ class Pedestrian:
             self.road_max = cy + road_w // 2
             self.cross_x = x_cross
             self.cross_y = None
+            self.curb_waypoint_idx = 2
         
         self.current_target_idx = 0
         self.x, self.y = self.waypoints[0]
@@ -193,6 +215,47 @@ class Pedestrian:
             return pygame.Rect(self.cross_x - 20, self.road_min,
                              40, self.road_max - self.road_min)
     
+    def _get_vehicle_avoidance(self, vehicles):
+        """Calculate lateral avoidance vector to walk around stopped/slow vehicles."""
+        if not vehicles or not self.crossing:
+            return 0, 0
+        
+        avoidance_x = 0
+        avoidance_y = 0
+        ped_rect = pygame.Rect(self.x - 8, self.y - 8, 16, 16)
+        
+        for v in vehicles:
+            # Only avoid vehicles that are near our path
+            dx = self.x - v.x
+            dy = self.y - v.y
+            dist_sq = dx * dx + dy * dy
+            
+            # Avoidance radius — react within 40 pixels
+            avoidance_radius = 40
+            if dist_sq > avoidance_radius * avoidance_radius:
+                continue
+            if dist_sq < 1:
+                dist_sq = 1
+            
+            dist = math.sqrt(dist_sq)
+            
+            # Repulsion force inversely proportional to distance
+            # Push perpendicular to our crossing direction
+            strength = (avoidance_radius - dist) / avoidance_radius * 60
+            
+            if self.crossing_axis == "horizontal":
+                # We're moving horizontally; dodge vertically
+                if dy == 0:
+                    dy = random.choice([-1, 1])
+                avoidance_y += (dy / abs(dy)) * strength
+            else:
+                # We're moving vertically; dodge horizontally
+                if dx == 0:
+                    dx = random.choice([-1, 1])
+                avoidance_x += (dx / abs(dx)) * strength
+        
+        return avoidance_x, avoidance_y
+    
     def move(self, dt, light_states, vip_active=False, vehicles=None):
         if self.finished:
             return
@@ -207,11 +270,11 @@ class Pedestrian:
         dy = target[1] - self.y
         dist = (dx**2 + dy**2)**0.5
         
-        # === PHASE 1: Walking to curb (waypoint 0 -> 1) ===
+        # === PHASE: Walking to curb (waypoints 0 -> curb_waypoint_idx) ===
         # Just walk normally, no checks needed
         
-        # === PHASE 2: At curb, wait for safe crossing (at waypoint 1) ===
-        if self.current_target_idx == 1 and dist < 8:
+        # === PHASE: At curb, wait for safe crossing ===
+        if self.current_target_idx == self.curb_waypoint_idx and dist < 8:
             if not self.can_cross(light_states, vip_active, vehicles):
                 self.waiting = True
                 self.wait_time += dt
@@ -220,11 +283,11 @@ class Pedestrian:
                 self.waiting = False
                 self.crossing = True  # Start crossing!
         
-        # === PHASE 3: Crossing the road (waypoint 1 -> 2) ===
+        # === PHASE: Crossing the road ===
         # Once crossing, NEVER stop. Commit to crossing.
         # Use faster speed while on road.
         
-        # === PHASE 4: Reached other side (waypoint 2 -> 3) ===
+        # === PHASE: Reached other side ===
         # Walk onto sidewalk and finish
         
         # Reached waypoint, advance to next
@@ -239,8 +302,8 @@ class Pedestrian:
             dy = target[1] - self.y
             dist = (dx**2 + dy**2)**0.5
             
-            # Check if we just finished crossing (reached waypoint 2)
-            if self.current_target_idx >= 3:
+            # Check if we just finished crossing (reached post-cross sidewalk waypoint)
+            if self.current_target_idx >= self.curb_waypoint_idx + 2:
                 self.crossing = False
         
         # Move towards target
@@ -251,8 +314,17 @@ class Pedestrian:
             # Use faster speed while crossing the road
             current_speed = self.crossing_speed if self.crossing else self.speed
             
-            self.x += nx * current_speed * dt
-            self.y += ny * current_speed * dt
+            move_x = nx * current_speed * dt
+            move_y = ny * current_speed * dt
+            
+            # Add vehicle avoidance if crossing
+            if self.crossing and vehicles:
+                avoid_x, avoid_y = self._get_vehicle_avoidance(vehicles)
+                move_x += avoid_x * dt
+                move_y += avoid_y * dt
+            
+            self.x += move_x
+            self.y += move_y
             self.animation_offset += dt * 10
 
     def draw(self, surface):
@@ -279,14 +351,22 @@ class PedestrianManager:
     def __init__(self, road_info, geometry=None):
         self.pedestrians = []
         self.road_info = road_info
-        self.spawn_timer = random.uniform(2, 4)
+        self.spawn_rate_ppm = 30  # Persons per minute (default)
+        
+        # Use exponential distribution for spawn timer
+        if self.spawn_rate_ppm > 0:
+            self.spawn_timer = random.expovariate(self.spawn_rate_ppm / 60.0)
+        else:
+            self.spawn_timer = float('inf')
         
         # Default geometry (will be set from main.py)
         self.geometry = geometry or {
             "cx": 500,
             "cy": 350,
             "road_width": 220,
-            "cross_size": 260
+            "cross_size": 260,
+            "screen_width": 1000,
+            "screen_height": 700
         }
         
         # Crossing types available
@@ -297,13 +377,15 @@ class PedestrianManager:
             "vertical_right"
         ]
         
-    def set_geometry(self, cx, cy, road_width, cross_size):
+    def set_geometry(self, cx, cy, road_width, cross_size, screen_width=1000, screen_height=700):
         """Set intersection geometry from main.py."""
         self.geometry = {
             "cx": cx,
             "cy": cy,
             "road_width": road_width,
-            "cross_size": cross_size
+            "cross_size": cross_size,
+            "screen_width": screen_width,
+            "screen_height": screen_height
         }
 
     def get_active_crosswalks(self):
@@ -324,7 +406,10 @@ class PedestrianManager:
         self.spawn_timer -= dt
         if self.spawn_timer <= 0:
             self.spawn_pedestrian()
-            self.spawn_timer = random.uniform(3, 7)
+            if self.spawn_rate_ppm > 0:
+                self.spawn_timer = random.expovariate(self.spawn_rate_ppm / 60.0)
+            else:
+                self.spawn_timer = float('inf')
         
         # Flatten vehicle dict to list for collision checks
         vehicles = []

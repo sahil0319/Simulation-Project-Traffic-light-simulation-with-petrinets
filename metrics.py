@@ -1,3 +1,4 @@
+# metrics.py
 import pygame
 
 class Metrics:

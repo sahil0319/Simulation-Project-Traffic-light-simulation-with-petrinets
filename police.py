@@ -454,81 +454,176 @@ class VIPVehicle:
 
 
 class VIPConvoy:
-    """Manages VIP vehicle with police escort."""
+    """Manages VIP vehicle with police escort.
+    Phase 1: Blockers drive in from screen edges to block perpendicular roads.
+    Phase 2: After blockers are in position, VIP + escorts appear and drive through.
+    """
     
     def __init__(self, approach, road_info, geometry):
         self.approach = approach
         self.road_info = road_info
         self.geometry = geometry
         
-        self.vip = VIPVehicle(approach, road_info)
+        # Phase management
+        self.phase = 1  # 1 = blockers deploying, 2 = VIP moving
+        self.phase_timer = 0
+        self.blocker_deploy_time = 3.0  # Seconds before VIP appears
+        
+        # VIP and escorts created later in phase 2
+        self.vip = None
         self.escorts = []
         self.blockers = []
         
         self.active = True
-        self.state = "approaching"  # approaching, crossing, passed
         
-        # Create escort vehicles
-        self._create_escorts()
-        self._create_blockers()
+        # Create blockers that drive in from screen edges
+        self._create_blockers_from_edges()
     
     def _create_escorts(self):
         """Create police escorts around VIP."""
-        # Front escort
         front = PoliceVehicle(self.vip.x, self.vip.y, self.approach, self.road_info, "escort")
-        
-        # Rear escort
         rear = PoliceVehicle(self.vip.x, self.vip.y, self.approach, self.road_info, "escort")
-        
         self.escorts = [front, rear]
     
-    def _create_blockers(self):
-        """Create police blockers at perpendicular roads."""
+    def _create_blockers_from_edges(self):
+        """Create police blockers that spawn at screen edges and drive to blocking positions."""
         cx = self.geometry["cx"]
         cy = self.geometry["cy"]
         road_w = self.geometry["road_width"]
         cross_s = self.geometry["cross_size"]
+        screen_w = self.geometry.get("screen_width", 1000)
+        screen_h = self.geometry.get("screen_height", 700)
         
-        # Block perpendicular traffic - position blockers closer to intersection
         if self.approach in ["N", "S"]:
-            # Block E and W approaches
+            # Convoy is vertical. Block E and W approaches.
+            # Use the ambulance (outer) lane for each approach direction
+            # W ambulance lane: cy + road_w/4 + 35
+            # E ambulance lane: cy - road_w/4 - 35
+            
+            b1_start_x = -60
+            b1_target_x = cx - cross_s // 2 - 60
+            b1_y = cy + road_w // 4 + 35  # W ambulance lane (bottom/outer)
             blocker_w = PoliceVehicle(
-                cx - cross_s // 2 - 60, cy + road_w // 4,
-                "E", self.road_info, "blocker"
-            )
-            blocker_e = PoliceVehicle(
-                cx + cross_s // 2 + 60, cy - road_w // 4,
+                b1_start_x, b1_y,
                 "W", self.road_info, "blocker"
             )
+            blocker_w._target_x = b1_target_x
+            blocker_w._target_y = b1_y
+            blocker_w._deploying = True
+            blocker_w.speed = 200
+            
+            b2_start_x = screen_w + 60
+            b2_target_x = cx + cross_s // 2 + 60
+            b2_y = cy - road_w // 4 - 35  # E ambulance lane (top/outer)
+            blocker_e = PoliceVehicle(
+                b2_start_x, b2_y,
+                "E", self.road_info, "blocker"
+            )
+            blocker_e._target_x = b2_target_x
+            blocker_e._target_y = b2_y
+            blocker_e._deploying = True
+            blocker_e.speed = 200
+            
             self.blockers = [blocker_w, blocker_e]
         else:
-            # Block N and S approaches
+            # Convoy is horizontal. Block N and S approaches.
+            # N ambulance lane: cx - road_w/4 - 35
+            # S ambulance lane: cx + road_w/4 + 35
+            
+            b1_start_y = -60
+            b1_target_y = cy - cross_s // 2 - 60
+            b1_x = cx - road_w // 4 - 35  # N ambulance lane (left/outer)
             blocker_n = PoliceVehicle(
-                cx - road_w // 4, cy - cross_s // 2 - 60,
-                "S", self.road_info, "blocker"
-            )
-            blocker_s = PoliceVehicle(
-                cx + road_w // 4, cy + cross_s // 2 + 60,
+                b1_x, b1_start_y,
                 "N", self.road_info, "blocker"
             )
+            blocker_n._target_x = b1_x
+            blocker_n._target_y = b1_target_y
+            blocker_n._deploying = True
+            blocker_n.speed = 200
+            
+            b2_start_y = screen_h + 60
+            b2_target_y = cy + cross_s // 2 + 60
+            b2_x = cx + road_w // 4 + 35  # S ambulance lane (right/outer)
+            blocker_s = PoliceVehicle(
+                b2_x, b2_start_y,
+                "S", self.road_info, "blocker"
+            )
+            blocker_s._target_x = b2_x
+            blocker_s._target_y = b2_target_y
+            blocker_s._deploying = True
+            blocker_s.speed = 200
+            
             self.blockers = [blocker_n, blocker_s]
+    
+    def _blockers_in_position(self):
+        """Check if all blockers have reached their target positions."""
+        for b in self.blockers:
+            if getattr(b, '_deploying', False):
+                dx = b._target_x - b.x
+                dy = b._target_y - b.y
+                if (dx * dx + dy * dy) > 100:  # > 10px away
+                    return False
+        return True
+    
+    def _compute_turn_path(self, blocker, idx):
+        """Compute waypoints for a blocker to drive into the intersection and turn
+        to follow the convoy direction. Returns list of (x, y, approach_at_waypoint).
+        The approach is set to the NEXT movement direction so the car visually
+        rotates before driving forward."""
+        cx = self.geometry["cx"]
+        cy = self.geometry["cy"]
+        road_w = self.geometry["road_width"]
+        
+        # Offset each blocker into a different sub-lane so they don't overlap
+        # Sub-lane offset: ~20px apart, centered on the VIP's lane
+        lane_spread = 20
+        sub_offset = -lane_spread // 2 + idx * lane_spread  # idx 0 → -10, idx 1 → +10
+        
+        if self.approach == "N":  # VIP going down
+            target_x = cx - road_w // 4 + sub_offset
+            # wp1: drive forward to the turn point, then ROTATE to face down
+            wp1 = (target_x, blocker.y, "N")
+            # wp2: drive downward a good distance to catch up
+            wp2 = (target_x, blocker.y + 250, "N")
+            return [wp1, wp2]
+        
+        elif self.approach == "S":  # VIP going up
+            target_x = cx + road_w // 4 + sub_offset
+            wp1 = (target_x, blocker.y, "S")
+            wp2 = (target_x, blocker.y - 250, "S")
+            return [wp1, wp2]
+        
+        elif self.approach == "E":  # VIP going left
+            target_y = cy - road_w // 4 + sub_offset
+            wp1 = (blocker.x, target_y, "E")
+            wp2 = (blocker.x - 250, target_y, "E")
+            return [wp1, wp2]
+        
+        elif self.approach == "W":  # VIP going right
+            target_y = cy + road_w // 4 + sub_offset
+            wp1 = (blocker.x, target_y, "W")
+            wp2 = (blocker.x + 250, target_y, "W")
+            return [wp1, wp2]
+        
+        return []
     
     def get_escort_offsets(self):
         """Get position offsets for front and rear escorts based on approach."""
         front_offset = (0, 0)
         rear_offset = (0, 0)
-        spacing = 80  # Increased from 70 for visual clarity
+        spacing = 80
         
-        if self.approach == "N":  # Moving down
+        if self.approach == "N":
             front_offset = (0, -spacing)
             rear_offset = (0, spacing)
-        elif self.approach == "S":  # Moving up
+        elif self.approach == "S":
             front_offset = (0, spacing)
             rear_offset = (0, -spacing)
-        elif self.approach == "E":  # Moving left
+        elif self.approach == "E":
             front_offset = (spacing, 0)
             rear_offset = (-spacing, 0)
-        elif self.approach == "W":  # Moving right
+        elif self.approach == "W":
             front_offset = (-spacing, 0)
             rear_offset = (spacing, 0)
         
@@ -538,37 +633,141 @@ class VIPConvoy:
         if not self.active:
             return
         
-        # Move VIP
-        self.vip.move(dt)
+        if self.phase == 1:
+            # Phase 1: Drive blockers to their positions
+            self.phase_timer += dt
+            
+            for b in self.blockers:
+                if getattr(b, '_deploying', False):
+                    dx = b._target_x - b.x
+                    dy = b._target_y - b.y
+                    dist = math.sqrt(dx * dx + dy * dy)
+                    if dist > 5:
+                        nx = dx / dist
+                        ny = dy / dist
+                        b.x += nx * b.speed * dt
+                        b.y += ny * b.speed * dt
+                        b.update_rect()
+                    else:
+                        b.x = b._target_x
+                        b.y = b._target_y
+                        b._deploying = False
+                        b.update_rect()
+            
+            # Transition to phase 2 when blockers are in place or timer expires
+            if self._blockers_in_position() or self.phase_timer >= self.blocker_deploy_time:
+                self.phase = 2
+                # Now spawn VIP and escorts
+                self.vip = VIPVehicle(self.approach, self.road_info)
+                self._create_escorts()
         
-        # Update escorts to follow VIP smoothly
-        front_offset, rear_offset = self.get_escort_offsets()
+        elif self.phase == 2:
+            # Phase 2: VIP is moving through
+            self.vip.move(dt)
+            
+            front_offset, rear_offset = self.get_escort_offsets()
+            if len(self.escorts) >= 2:
+                self.escorts[0].move_with_vip(self.vip.x, self.vip.y,
+                                              front_offset[0], front_offset[1], dt)
+                self.escorts[1].move_with_vip(self.vip.x, self.vip.y,
+                                              rear_offset[0], rear_offset[1], dt)
+            
+            if not self.vip.active:
+                self.active = False
+                
+            # Check if VIP has passed the center to trigger phase 3
+            cx, cy = self.geometry["cx"], self.geometry["cy"]
+            vip_passed_center = False
+            if self.approach == "N" and self.vip.y > cy + 40:
+                vip_passed_center = True
+            elif self.approach == "S" and self.vip.y < cy - 40:
+                vip_passed_center = True
+            elif self.approach == "E" and self.vip.x < cx - 40:
+                vip_passed_center = True
+            elif self.approach == "W" and self.vip.x > cx + 40:
+                vip_passed_center = True
+                
+            if vip_passed_center:
+                self.phase = 3
+                for i, b in enumerate(self.blockers):
+                    b.role = "escort"
+                    b.blocking = False
+                    b.speed = 150  # Match VIP speed from the start
+                    b._turn_waypoints = self._compute_turn_path(b, i)
+                    b._turn_wp_idx = 0
+                    b._done_turning = False
         
-        if len(self.escorts) >= 2:
-            self.escorts[0].move_with_vip(self.vip.x, self.vip.y, 
-                                          front_offset[0], front_offset[1], dt)
-            self.escorts[1].move_with_vip(self.vip.x, self.vip.y,
-                                          rear_offset[0], rear_offset[1], dt)
+        elif self.phase == 3:
+            # Phase 3: Blockers turn through intersection then drive straight out
+            self.vip.move(dt)
+            
+            front_offset, rear_offset = self.get_escort_offsets()
+            if len(self.escorts) >= 2:
+                self.escorts[0].move_with_vip(self.vip.x, self.vip.y,
+                                              front_offset[0], front_offset[1], dt)
+                self.escorts[1].move_with_vip(self.vip.x, self.vip.y,
+                                              rear_offset[0], rear_offset[1], dt)
+            
+            for b in self.blockers:
+                if not b._done_turning:
+                    # Follow turn waypoints sequentially
+                    if b._turn_wp_idx < len(b._turn_waypoints):
+                        wp_x, wp_y, wp_approach = b._turn_waypoints[b._turn_wp_idx]
+                        dx = wp_x - b.x
+                        dy = wp_y - b.y
+                        dist = math.sqrt(dx * dx + dy * dy)
+                        if dist < 10:
+                            # Reached this waypoint — update facing direction
+                            b.approach = wp_approach
+                            b.update_rect()
+                            b._turn_wp_idx += 1
+                        else:
+                            nx = dx / dist
+                            ny = dy / dist
+                            b.x += nx * b.speed * dt
+                            b.y += ny * b.speed * dt
+                            b.update_rect()
+                    else:
+                        b._done_turning = True
+                        b.approach = self.approach
+                        b.speed = 150  # Match VIP speed so they don't collide
+                        b.update_rect()
+                else:
+                    # Done turning — just drive straight at VIP speed
+                    if self.approach == "N":   b.y += b.speed * dt
+                    elif self.approach == "S": b.y -= b.speed * dt
+                    elif self.approach == "E": b.x -= b.speed * dt
+                    elif self.approach == "W": b.x += b.speed * dt
+                    b.update_rect()
+            
+            if not self.vip.active:
+                self.active = False
         
-        # Update blockers (stationary)
-        for blocker in self.blockers:
-            blocker.update(dt)
-        
-        # Check if VIP has exited
-        if not self.vip.active:
-            self.active = False
+        # Update blockers if not in phase 3 (phase 3 updates them manually)
+        if self.phase != 3:
+            for blocker in self.blockers:
+                blocker.update(dt)
+    
+    def get_blocker_rects(self):
+        """Return rects of stationary blockers so vehicles can stop for them."""
+        rects = []
+        for b in self.blockers:
+            if b.role == "blocker" and not getattr(b, '_deploying', False):
+                rects.append(b.rect)
+        return rects
     
     def draw(self, surface):
-        # Draw blockers first (they're stationary)
+        # Draw blockers first
         for blocker in self.blockers:
             blocker.draw(surface)
-        
-        # Draw escorts
-        for escort in self.escorts:
-            escort.draw(surface)
-        
-        # Draw VIP on top
-        self.vip.draw(surface)
+
+        # Draw VIP + escorts in phases where they exist (phase 2 and 3)
+        if self.vip:
+            for escort in self.escorts:
+                escort.draw(surface)
+            # Draw VIP on top
+            self.vip.draw(surface)
+
     
     def get_blocked_directions(self):
         """Return list of directions that should have RED lights (perpendicular to VIP)."""
@@ -583,12 +782,25 @@ class VIPConvoy:
     
     def get_vip_info(self):
         """Return VIP position and approach for lane clearing."""
-        return {
-            "x": self.vip.x,
-            "y": self.vip.y,
-            "approach": self.approach,
-            "active": self.active
+        if self.vip:
+            return {
+                "x": self.vip.x,
+                "y": self.vip.y,
+                "approach": self.approach,
+                "active": self.active
+            }
+        return {"x": 0, "y": 0, "approach": self.approach, "active": self.active}
+    
+    def get_arrow_info(self):
+        """Return info for flashing directional arrow."""
+        # Arrow shows which direction the convoy is coming FROM and going TO
+        direction_map = {
+            "N": {"from": "top", "to": "bottom"},
+            "S": {"from": "bottom", "to": "top"},
+            "E": {"from": "right", "to": "left"},
+            "W": {"from": "left", "to": "right"},
         }
+        return direction_map.get(self.approach, {"from": "top", "to": "bottom"})
 
 
 class PoliceManager:
@@ -598,15 +810,17 @@ class PoliceManager:
         self.road_info = road_info
         self.geometry = geometry
         self.convoys = []
-        self.vip_spawn_timer = random.uniform(15, 30)  # First VIP after 15-30 seconds
+        self.vip_spawn_timer = random.expovariate(1.0 / 45.0)  # Average 45s between spawns
         self.vip_active = False
         
-    def set_geometry(self, cx, cy, road_width, cross_size):
+    def set_geometry(self, cx, cy, road_width, cross_size, screen_width=1000, screen_height=700):
         self.geometry = {
             "cx": cx,
             "cy": cy,
             "road_width": road_width,
-            "cross_size": cross_size
+            "cross_size": cross_size,
+            "screen_width": screen_width,
+            "screen_height": screen_height
         }
     
     def spawn_vip_convoy(self, approach=None):
@@ -626,7 +840,7 @@ class PoliceManager:
         self.vip_spawn_timer -= dt
         if self.vip_spawn_timer <= 0 and not self.vip_active:
             self.spawn_vip_convoy()
-            self.vip_spawn_timer = random.uniform(30, 55)  # Next VIP in 30-55 seconds
+            self.vip_spawn_timer = random.expovariate(1.0 / 45.0)  # Next VIP in ~45s average
         
         # Update convoys
         for convoy in self.convoys:
@@ -641,6 +855,96 @@ class PoliceManager:
     def draw(self, surface):
         for convoy in self.convoys:
             convoy.draw(surface)
+        
+        # Draw flashing directional arrows for active VIP convoys
+        if self.vip_active and self.convoys:
+            self._draw_vip_arrow(surface, self.convoys[0])
+    
+    def _draw_vip_arrow(self, surface, convoy):
+        """Draw a flashing arrow at intersection center pointing in convoy travel direction."""
+        approach = convoy.approach
+        
+        # Flash at ~3Hz
+        flash = (pygame.time.get_ticks() // 160) % 2 == 0
+        if not flash:
+            return
+        
+        cx = self.geometry["cx"]
+        cy = self.geometry["cy"]
+        
+        arrow_color = (255, 200, 0)  # Bright yellow
+        glow_color = (255, 200, 0, 80)
+        
+        # Arrow centered at intersection, pointing in TRAVEL direction
+        ax, ay = cx, cy
+        s = 35  # arrow size
+        hw = 22  # arrowhead half-width
+        bw = 10  # body half-width
+        
+        if approach == "N":  # Traveling downward
+            points = [
+                (ax, ay + s),           # tip (bottom)
+                (ax - hw, ay + s - 20), # left wing
+                (ax - bw, ay + s - 20), # left neck
+                (ax - bw, ay - s),      # top-left
+                (ax + bw, ay - s),      # top-right
+                (ax + bw, ay + s - 20), # right neck
+                (ax + hw, ay + s - 20), # right wing
+            ]
+        elif approach == "S":  # Traveling upward
+            points = [
+                (ax, ay - s),
+                (ax - hw, ay - s + 20),
+                (ax - bw, ay - s + 20),
+                (ax - bw, ay + s),
+                (ax + bw, ay + s),
+                (ax + bw, ay - s + 20),
+                (ax + hw, ay - s + 20),
+            ]
+        elif approach == "E":  # Traveling leftward
+            points = [
+                (ax - s, ay),
+                (ax - s + 20, ay - hw),
+                (ax - s + 20, ay - bw),
+                (ax + s, ay - bw),
+                (ax + s, ay + bw),
+                (ax - s + 20, ay + bw),
+                (ax - s + 20, ay + hw),
+            ]
+        elif approach == "W":  # Traveling rightward
+            points = [
+                (ax + s, ay),
+                (ax + s - 20, ay - hw),
+                (ax + s - 20, ay - bw),
+                (ax - s, ay - bw),
+                (ax - s, ay + bw),
+                (ax + s - 20, ay + bw),
+                (ax + s - 20, ay + hw),
+            ]
+        else:
+            return
+        
+        # Glow effect
+        glow_surf = pygame.Surface((100, 100), pygame.SRCALPHA)
+        pygame.draw.circle(glow_surf, glow_color, (50, 50), 45)
+        surface.blit(glow_surf, (ax - 50, ay - 50))
+        
+        # Arrow polygon
+        pygame.draw.polygon(surface, arrow_color, points)
+        pygame.draw.polygon(surface, (255, 255, 255), points, 2)
+        
+        # Label above or below the arrow
+        font = pygame.font.Font(None, 20)
+        label = font.render("VIP CONVOY", True, (255, 255, 0))
+        if approach in ["N", "W"]:
+            label_rect = label.get_rect(center=(ax, ay - s - 18))
+        else:
+            label_rect = label.get_rect(center=(ax, ay + s + 18))
+        bg_rect = label_rect.inflate(8, 4)
+        bg = pygame.Surface(bg_rect.size, pygame.SRCALPHA)
+        bg.fill((0, 0, 0, 160))
+        surface.blit(bg, bg_rect)
+        surface.blit(label, label_rect)
     
     def is_vip_active(self):
         return self.vip_active
@@ -653,7 +957,8 @@ class PoliceManager:
         return list(blocked)
     
     def get_spawn_blocked_directions(self):
-        """Get ALL directions blocked for spawning during VIP passage."""
+        """Get ALL directions blocked for spawning during VIP passage.
+        This blocks ALL traffic including ambulances."""
         if self.vip_active:
             return ["N", "S", "E", "W"]
         return []
@@ -668,4 +973,17 @@ class PoliceManager:
         """Get the direction the VIP is traveling (for traffic preemption)."""
         if self.convoys:
             return self.convoys[0].approach
+        return None
+    
+    def get_blocker_rects(self):
+        """Return all stationary blocker rects for vehicle collision avoidance."""
+        rects = []
+        for convoy in self.convoys:
+            rects.extend(convoy.get_blocker_rects())
+        return rects
+    
+    def get_arrow_info(self):
+        """Get arrow info for external rendering if needed."""
+        if self.convoys:
+            return self.convoys[0].get_arrow_info()
         return None

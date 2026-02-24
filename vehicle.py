@@ -94,6 +94,10 @@ class Vehicle:
         self.speed = self.max_speed
         self.state = "moving" 
         
+        # Randomized gap preferences for natural spacing
+        self.preferred_gap = max(5, random.normalvariate(12, 4))  # Gap to car ahead
+        self.stop_line_gap = max(5, random.normalvariate(8, 3))    # Gap to stop line
+        
         # Pick sprite
         available_colors = list(SPRITE_CACHE.get(self.type_name, {}).keys())
         if available_colors:
@@ -169,7 +173,7 @@ class Vehicle:
         
         self.rect.center = (self.x, self.y)
 
-    def move(self, dt, vehicle_ahead, stop_line_pos, light_state, all_vehicles=None, active_crosswalks=None, vip_info=None):
+    def move(self, dt, vehicle_ahead, stop_line_pos, light_state, all_vehicles=None, active_crosswalks=None, vip_info=None, blocker_rects=None):
         target_speed = self.max_speed
         
         # Ambulance ignores red lights? Or just stops if blocked?
@@ -208,8 +212,15 @@ class Vehicle:
                     # vehicle_ahead.x should be > self.x
                     dist_to_vehicle = vehicle_ahead.x - self.x - (self.length/2 + vehicle_ahead.length/2)
                 
-                if dist_to_vehicle < 20:
+                if dist_to_vehicle < 0:
+                    # Already overlapping — emergency brake and push back
+                    self.speed = 0
                     target_speed = 0
+                elif dist_to_vehicle < self.preferred_gap:
+                    target_speed = 0
+                    self.speed = max(0, self.speed - 600 * dt)  # Harder braking
+                elif dist_to_vehicle < 60:
+                    target_speed = min(target_speed, vehicle_ahead.speed * 0.8)
                 elif dist_to_vehicle < 100:
                     target_speed = min(target_speed, vehicle_ahead.speed)
 
@@ -233,6 +244,26 @@ class Vehicle:
                     if box.colliderect(other.rect):
                         target_speed = 0
                         self.speed = 0 # Instant emergency brake to avoid clipping
+                        break
+
+        # Police blocker collision avoidance — stop before blocker vehicles
+        if blocker_rects:
+            safety_dist = 80
+            box = None
+            if self.approach == "N":
+                box = pygame.Rect(self.x - 20, self.y + self.length/2, 40, safety_dist)
+            elif self.approach == "S":
+                box = pygame.Rect(self.x - 20, self.y - self.length/2 - safety_dist, 40, safety_dist)
+            elif self.approach == "E":
+                box = pygame.Rect(self.x - self.length/2 - safety_dist, self.y - 20, safety_dist, 40)
+            elif self.approach == "W":
+                box = pygame.Rect(self.x + self.length/2, self.y - 20, safety_dist, 40)
+            
+            if box:
+                for br in blocker_rects:
+                    if box.colliderect(br):
+                        target_speed = 0
+                        self.speed = 0
                         break
 
         # Light logic
@@ -267,7 +298,7 @@ class Vehicle:
                     should_stop = True
             
             if should_stop:
-                if dist_to_line < 25:
+                if dist_to_line < self.stop_line_gap:
                     target_speed = 0
                 else:
                     target_speed = min(target_speed, (dist_to_line / 120) * self.max_speed)
@@ -338,7 +369,7 @@ class Vehicle:
             self.speed -= 400 * dt
         
         if self.speed < 0: self.speed = 0
-        if self.speed > self.max_speed * 1.5: self.speed = self.max_speed * 1.5
+        if self.speed > self.max_speed * 1.2: self.speed = self.max_speed * 1.2
 
         # Move
         move_dist = self.speed * dt
@@ -397,6 +428,10 @@ class VehicleManager:
         """Set VIP convoy info for lane clearing."""
         self.vip_info = vip_info
     
+    def set_blocker_rects(self, rects):
+        """Set police blocker rects for vehicle collision avoidance."""
+        self.blocker_rects = rects
+    
     def update(self, dt, light_states, active_crosswalks=None):
         self.spawn_timer -= dt
         if self.spawn_timer <= 0:
@@ -446,7 +481,7 @@ class VehicleManager:
                         vehicle_ahead = other
                         break
                 
-                vehicle.move(dt, vehicle_ahead, stop_line, light, all_vehicles=all_vehicles_list, active_crosswalks=active_crosswalks, vip_info=self.vip_info)
+                vehicle.move(dt, vehicle_ahead, stop_line, light, all_vehicles=all_vehicles_list, active_crosswalks=active_crosswalks, vip_info=self.vip_info, blocker_rects=getattr(self, 'blocker_rects', []))
                 
                 # Check bounds (keep if within reasonable area)
                 # W=1000, H=700
