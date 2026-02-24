@@ -3,27 +3,42 @@
 import pygame
 
 class GameMode:
-    def __init__(self, controller, vehicle_manager):
+    def __init__(self, controller, vehicle_manager, pedestrian_manager=None):
         self.controller = controller
         self.vehicle_manager = vehicle_manager
+        self.pedestrian_manager = pedestrian_manager
         self.name = "Generic"
 
-    def update(self, dt):
+    def update(self, dt, police_manager=None):
         pass
 
     def handle_input(self, event, selected_pole=None):
         pass
+    
+    def get_light_states(self):
+        return {}
 
 
 class AutomaticMode(GameMode):
-    def __init__(self, controller, vehicle_manager):
-        super().__init__(controller, vehicle_manager)
+    def __init__(self, controller, vehicle_manager, pedestrian_manager=None):
+        super().__init__(controller, vehicle_manager, pedestrian_manager)
         self.name = "Automatic"
 
-    def update(self, dt):
-        # Controller decides everything
-        self.controller.update(dt, self.vehicle_manager)
-        self.vehicle_manager.update(dt, self.get_light_states())
+    def update(self, dt, police_manager=None):
+        # Check for VIP preemption
+        vip_active = police_manager.is_vip_active() if police_manager else False
+        blocked_dirs = police_manager.get_blocked_directions() if police_manager else []
+        vip_dir = police_manager.get_vip_direction() if police_manager else None
+        
+        # Controller decides everything (with VIP override)
+        self.controller.update(dt, self.vehicle_manager, vip_active, blocked_dirs, vip_dir)
+        
+        # Get active crosswalks for vehicle-pedestrian awareness
+        active_crosswalks = []
+        if self.pedestrian_manager:
+            active_crosswalks = self.pedestrian_manager.get_active_crosswalks()
+        
+        self.vehicle_manager.update(dt, self.get_light_states(), active_crosswalks)
 
     def get_light_states(self):
         res = {}
@@ -37,14 +52,28 @@ class AutomaticMode(GameMode):
 # game_modes.py
 
 class ManualSurvivalMode(GameMode):
-    def __init__(self, controller, vehicle_manager):
-        super().__init__(controller, vehicle_manager)
+    def __init__(self, controller, vehicle_manager, pedestrian_manager=None):
+        super().__init__(controller, vehicle_manager, pedestrian_manager)
         self.name = "Manual Survival"
 
-    def update(self, dt):
+    def update(self, dt, police_manager=None):
+        # Check for VIP preemption (forces lights even in manual mode)
+        vip_active = police_manager.is_vip_active() if police_manager else False
+        blocked_dirs = police_manager.get_blocked_directions() if police_manager else []
+        vip_dir = police_manager.get_vip_direction() if police_manager else None
+        
+        if vip_active:
+            # VIP overrides manual control
+            self.controller.set_vip_preemption(vip_dir, blocked_dirs)
+        
         # time passes, but controller does NOT auto-step
         self.controller.advance_time(dt)
-        self.vehicle_manager.update(dt, self.get_light_states())
+        
+        active_crosswalks = []
+        if self.pedestrian_manager:
+            active_crosswalks = self.pedestrian_manager.get_active_crosswalks()
+        
+        self.vehicle_manager.update(dt, self.get_light_states(), active_crosswalks)
 
     def handle_input(self, event, selected_pole=None):
         if event.type == pygame.KEYDOWN:
@@ -89,16 +118,21 @@ class ManualSurvivalMode(GameMode):
 
 
 class ScenarioChallengeMode(GameMode):
-    def __init__(self, controller, vehicle_manager):
-        super().__init__(controller, vehicle_manager)
+    def __init__(self, controller, vehicle_manager, pedestrian_manager=None):
+        super().__init__(controller, vehicle_manager, pedestrian_manager)
         self.name = "Challenge: Rush Hour"
         self.time_elapsed = 0
         
-    def update(self, dt):
+    def update(self, dt, police_manager=None):
         self.time_elapsed += dt
         
-        # Adaptive controller runs
-        self.controller.update(dt, self.vehicle_manager)
+        # Check for VIP preemption
+        vip_active = police_manager.is_vip_active() if police_manager else False
+        blocked_dirs = police_manager.get_blocked_directions() if police_manager else []
+        vip_dir = police_manager.get_vip_direction() if police_manager else None
+        
+        # Adaptive controller runs (with VIP override)
+        self.controller.update(dt, self.vehicle_manager, vip_active, blocked_dirs, vip_dir)
         
         if self.time_elapsed < 30:
             pass
@@ -109,6 +143,10 @@ class ScenarioChallengeMode(GameMode):
              if self.vehicle_manager.spawn_timer > 0.5:
                 self.vehicle_manager.spawn_timer = 0.5
                  
-        self.vehicle_manager.update(dt, self.get_light_states())
+        active_crosswalks = []
+        if self.pedestrian_manager:
+            active_crosswalks = self.pedestrian_manager.get_active_crosswalks()
+        
+        self.vehicle_manager.update(dt, self.get_light_states(), active_crosswalks)
 
     get_light_states = AutomaticMode.get_light_states

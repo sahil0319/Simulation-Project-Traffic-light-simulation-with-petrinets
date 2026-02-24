@@ -5,6 +5,7 @@ from sys import exit
 from adaptive_controller import AdaptiveController
 from vehicle import VehicleManager
 from pedestrian import PedestrianManager, Pedestrian
+from police import PoliceManager
 from game_modes import AutomaticMode, ManualSurvivalMode, ScenarioChallengeMode
 from metrics import Metrics
 
@@ -87,23 +88,43 @@ poles = [
 
 approach_map = {"N": 0, "E": 1, "S": 3, "W": 2}
 
+# --- Geometry Info for Pedestrians and Police ---
+geometry = {
+    "cx": cx,
+    "cy": cy,
+    "road_width": road_width,
+    "cross_size": cross_size,
+    "screen_width": W,
+    "screen_height": H
+}
+
 # --- Managers ---
 vehicle_manager = VehicleManager(road_info)
-pedestrian_manager = PedestrianManager(road_info)
+pedestrian_manager = PedestrianManager(road_info, geometry)
+police_manager = PoliceManager(road_info, geometry)
 controller = AdaptiveController(poles, approach_map)
 controller.apply_states()
 metrics = Metrics()
 
 # --- Modes ---
 modes = [
-    AutomaticMode(controller, vehicle_manager),
-    ManualSurvivalMode(controller, vehicle_manager),
-    ScenarioChallengeMode(controller, vehicle_manager)
+    AutomaticMode(controller, vehicle_manager, pedestrian_manager),
+    ManualSurvivalMode(controller, vehicle_manager, pedestrian_manager),
+    ScenarioChallengeMode(controller, vehicle_manager, pedestrian_manager)
 ]
 current_mode_idx = 0
 
 # --- Selected Pole (Manual Only) ---
 selected_pole = None
+
+# --- Pedestrian Spawn Rate Slider ---
+slider_x = 20
+slider_y = H - 40
+slider_w = 200
+slider_h = 10
+slider_min = 0    # 0 persons per minute
+slider_max = 120  # 120 persons per minute
+slider_dragging = False
 
 # --- Drawing Helpers ---
 def draw_sidewalk():
@@ -137,13 +158,44 @@ def draw_crosswalk_vertical(x, y_start, y_end, stripe_h=10, gap=8):
 
 def draw_ui():
     mode_name = modes[current_mode_idx].name
-    lbl = ui_font.render(f"Mode: {mode_name} (Press M to switch)", True, WHITE)
+    lbl = ui_font.render(f"Mode: {mode_name} (Press M to switch, V for VIP)", True, WHITE)
     screen.blit(lbl, (20, 20))
     
     if selected_pole is not None:
         p = poles[selected_pole]
         txt = ui_font.render(f"Selected: {p['name']} ({p['state']})", True, YELLOW)
         screen.blit(txt, (20, 50))
+    
+    # VIP indicator
+    if police_manager.is_vip_active():
+        vip_txt = ui_font.render("! VIP CONVOY PASSING !", True, (255, 215, 0))
+        txt_rect = vip_txt.get_rect(center=(W // 2, 25))
+        bg_rect = txt_rect.inflate(20, 10)
+        pygame.draw.rect(screen, (50, 50, 50), bg_rect, border_radius=5)
+        pygame.draw.rect(screen, (255, 215, 0), bg_rect, 2, border_radius=5)
+        screen.blit(vip_txt, txt_rect)
+    
+    # Pedestrian count
+    ped_waiting = pedestrian_manager.get_waiting_count()
+    if ped_waiting > 0:
+        ped_txt = ui_font.render(f"Pedestrians waiting: {ped_waiting}", True, (200, 200, 255))
+        screen.blit(ped_txt, (W - 250, 20))
+    
+    # --- Pedestrian Spawn Rate Slider ---
+    # Background track
+    pygame.draw.rect(screen, (60, 60, 60), (slider_x, slider_y, slider_w, slider_h), border_radius=4)
+    # Filled portion
+    rate = pedestrian_manager.spawn_rate_ppm
+    fill_frac = (rate - slider_min) / max(1, slider_max - slider_min)
+    fill_w = int(fill_frac * slider_w)
+    pygame.draw.rect(screen, (100, 200, 255), (slider_x, slider_y, fill_w, slider_h), border_radius=4)
+    # Knob
+    knob_x = slider_x + fill_w
+    pygame.draw.circle(screen, (255, 255, 255), (knob_x, slider_y + slider_h // 2), 8)
+    pygame.draw.circle(screen, (100, 200, 255), (knob_x, slider_y + slider_h // 2), 6)
+    # Label
+    rate_label = ui_font.render(f"Ped: {rate:.0f}/min", True, (200, 220, 255))
+    screen.blit(rate_label, (slider_x + slider_w + 15, slider_y - 8))
 
 # --- Main Loop ---
 running = True
@@ -161,7 +213,9 @@ while running:
                 current_mode_idx = (current_mode_idx + 1) % len(modes)
                 metrics = Metrics()
             
-                metrics = Metrics()
+            # V key spawns VIP convoy
+            if event.key == pygame.K_v:
+                police_manager.spawn_vip_convoy()
             
             new_selection = modes[current_mode_idx].handle_input(event, selected_pole)
             if new_selection is not None:
@@ -172,14 +226,46 @@ while running:
 
         if event.type == pygame.MOUSEBUTTONDOWN:
             mx, my = event.pos
-            for i, p in enumerate(poles):
-                rect = pygame.Rect(p["pos"][0]-20, p["pos"][1]-20, 40, 110)
-                if rect.collidepoint(mx, my):
-                    selected_pole = i
+            # Check slider interaction
+            knob_cx = slider_x + int(((pedestrian_manager.spawn_rate_ppm - slider_min) / max(1, slider_max - slider_min)) * slider_w)
+            if abs(mx - knob_cx) < 15 and abs(my - (slider_y + slider_h // 2)) < 15:
+                slider_dragging = True
+            else:
+                for i, p in enumerate(poles):
+                    rect = pygame.Rect(p["pos"][0]-20, p["pos"][1]-20, 40, 110)
+                    if rect.collidepoint(mx, my):
+                        selected_pole = i
+        
+        if event.type == pygame.MOUSEBUTTONUP:
+            slider_dragging = False
+        
+        if event.type == pygame.MOUSEMOTION and slider_dragging:
+            mx = event.pos[0]
+            frac = max(0, min(1, (mx - slider_x) / slider_w))
+            pedestrian_manager.spawn_rate_ppm = slider_min + frac * (slider_max - slider_min)
 
     # Update
     current_mode = modes[current_mode_idx]
-    current_mode.update(dt)
+    
+    # Update police/VIP system first
+    police_manager.update(dt)
+    
+    # Get blocked directions from VIP convoy
+    blocked_dirs = police_manager.get_blocked_directions()  # For traffic lights (perpendicular)
+    spawn_blocked = police_manager.get_spawn_blocked_directions()  # ALL dirs blocked for spawning
+    vehicle_manager.set_blocked_directions(spawn_blocked if spawn_blocked else blocked_dirs)
+    
+    # Pass VIP info to vehicles for lane clearing
+    vehicle_manager.set_vip_info(police_manager.get_vip_info())
+    vehicle_manager.set_blocker_rects(police_manager.get_blocker_rects())
+    
+    # Update mode (which updates controller and vehicles)
+    current_mode.update(dt, police_manager)
+    
+    # Update pedestrians with current light states, VIP status, and vehicle info
+    light_states = current_mode.get_light_states()
+    pedestrian_manager.update(dt, light_states, police_manager.is_vip_active(), vehicle_manager.vehicles)
+    
     metrics.update(vehicle_manager)
     
     # Draw
@@ -269,9 +355,10 @@ while running:
     pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_W, cy - stop_len//2, 8, stop_len))
     pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_E, cy - stop_len//2, 8, stop_len))
 
-    # Entities
-    vehicle_manager.draw(screen)
+    # Entities — draw pedestrians UNDER vehicles so cars appear on top
     pedestrian_manager.draw(screen)
+    vehicle_manager.draw(screen)
+    police_manager.draw(screen)  # Draw VIP convoy and police on top
 
     # Traffic Lights
     for i, p in enumerate(poles):
