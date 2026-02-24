@@ -169,7 +169,7 @@ class Vehicle:
         
         self.rect.center = (self.x, self.y)
 
-    def move(self, dt, vehicle_ahead, stop_line_pos, light_state, all_vehicles=None):
+    def move(self, dt, vehicle_ahead, stop_line_pos, light_state, all_vehicles=None, active_crosswalks=None, vip_info=None):
         target_speed = self.max_speed
         
         # Ambulance ignores red lights? Or just stops if blocked?
@@ -272,6 +272,65 @@ class Vehicle:
                 else:
                     target_speed = min(target_speed, (dist_to_line / 120) * self.max_speed)
         
+        # Pedestrian crosswalk avoidance — stop before crosswalk if pedestrian is crossing
+        if active_crosswalks:
+            for cw in active_crosswalks:
+                cw_rect = cw["rect"]
+                ped_x, ped_y = cw["pos"]
+                
+                dist_to_cw = float('inf')
+                is_ahead = False
+                
+                if self.approach == "N":  # Moving down (+y)
+                    if cw["axis"] == "horizontal" and cw_rect.top > self.y:
+                        dist_to_cw = cw_rect.top - self.y - self.length / 2
+                        is_ahead = True
+                elif self.approach == "S":  # Moving up (-y)
+                    if cw["axis"] == "horizontal" and cw_rect.bottom < self.y:
+                        dist_to_cw = self.y - cw_rect.bottom - self.length / 2
+                        is_ahead = True
+                elif self.approach == "E":  # Moving left (-x)
+                    if cw["axis"] == "vertical" and cw_rect.right < self.x:
+                        dist_to_cw = self.x - cw_rect.right - self.length / 2
+                        is_ahead = True
+                elif self.approach == "W":  # Moving right (+x)
+                    if cw["axis"] == "vertical" and cw_rect.left > self.x:
+                        dist_to_cw = cw_rect.left - self.x - self.length / 2
+                        is_ahead = True
+                
+                if is_ahead and 0 < dist_to_cw < 120:
+                    if dist_to_cw < 30:
+                        target_speed = 0
+                    else:
+                        target_speed = min(target_speed, (dist_to_cw / 120) * self.max_speed * 0.5)
+        
+        # VIP lane clearing — if VIP is behind us in our lane, speed up to clear
+        if vip_info and vip_info["active"] and not self.is_ambulance:
+            vip_approach = vip_info["approach"]
+            if self.approach == vip_approach:
+                # We're in the VIP's lane! Speed up to clear the road
+                vip_x, vip_y = vip_info["x"], vip_info["y"]
+                is_ahead_of_vip = False
+                dist_from_vip = 0
+                
+                if self.approach == "N" and self.y > vip_y:  # We're ahead (further down)
+                    is_ahead_of_vip = True
+                    dist_from_vip = self.y - vip_y
+                elif self.approach == "S" and self.y < vip_y:  # We're ahead (further up)
+                    is_ahead_of_vip = True
+                    dist_from_vip = vip_y - self.y
+                elif self.approach == "E" and self.x < vip_x:  # We're ahead (further left)
+                    is_ahead_of_vip = True
+                    dist_from_vip = vip_x - self.x
+                elif self.approach == "W" and self.x > vip_x:  # We're ahead (further right)
+                    is_ahead_of_vip = True
+                    dist_from_vip = self.x - vip_x
+                
+                if is_ahead_of_vip and dist_from_vip < 400:
+                    # Override all speed limits — floor it to clear the lane!
+                    target_speed = self.max_speed * 2.0
+                    # Ignore stop lines too — police have given clearance
+        
         # Physics
         if self.speed < target_speed:
             self.speed += 200 * dt
@@ -313,6 +372,8 @@ class VehicleManager:
         self.road_info = road_info
         self.spawn_timer = 0.5 # Start fast
         self.next_id = 0
+        self.blocked_directions = []  # Directions blocked by VIP/police
+        self.vip_info = None           # VIP convoy position info for lane clearing
 
     def get_lane_info(self, direction):
         """Returns (queue_length, max_wait_time) for the given lane."""
@@ -328,22 +389,36 @@ class VehicleManager:
         
         return queue_length, max_wait
 
-    def update(self, dt, light_states):
+    def set_blocked_directions(self, blocked):
+        """Set directions that are blocked by VIP/police."""
+        self.blocked_directions = blocked
+    
+    def set_vip_info(self, vip_info):
+        """Set VIP convoy info for lane clearing."""
+        self.vip_info = vip_info
+    
+    def update(self, dt, light_states, active_crosswalks=None):
         self.spawn_timer -= dt
         if self.spawn_timer <= 0:
-            direction = random.choice(["N", "S", "E", "W"])
-            
-            # 10% chance of Ambulance
-            is_ambulance = random.random() < 0.1
-            
-            self.spawn_vehicle(direction, is_ambulance)
-            self.spawn_timer = random.uniform(1.2, 3.0) 
+            # Don't spawn in blocked directions
+            available = [d for d in ["N", "S", "E", "W"] if d not in self.blocked_directions]
+            if available:
+                direction = random.choice(available)
+                
+                # 10% chance of Ambulance
+                is_ambulance = random.random() < 0.1
+                
+                self.spawn_vehicle(direction, is_ambulance)
+            self.spawn_timer = random.uniform(1.2, 3.0)
 
         for direction, lane_vehicles in self.vehicles.items():
             stop_line = self.road_info["stop_lines"][direction]
             
-            # Normal light logic (no global override)
-            light = light_states.get(direction, "red") 
+            # Force red if direction is blocked by VIP
+            if direction in self.blocked_directions:
+                light = "red"
+            else:
+                light = light_states.get(direction, "red")
             
             # Flatten list of all vehicles for cross-checking
             all_vehicles_list = [v for l in self.vehicles.values() for v in l]
@@ -371,7 +446,7 @@ class VehicleManager:
                         vehicle_ahead = other
                         break
                 
-                vehicle.move(dt, vehicle_ahead, stop_line, light, all_vehicles=all_vehicles_list)
+                vehicle.move(dt, vehicle_ahead, stop_line, light, all_vehicles=all_vehicles_list, active_crosswalks=active_crosswalks, vip_info=self.vip_info)
                 
                 # Check bounds (keep if within reasonable area)
                 # W=1000, H=700

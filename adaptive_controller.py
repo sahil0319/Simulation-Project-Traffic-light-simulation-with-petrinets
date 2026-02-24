@@ -8,6 +8,8 @@ class AdaptiveController:
         self.approach_pole_map = approach_pole_map
         self.active_direction = None # Currently Green direction
         self.next_direction = None   # Direction transitioning to Green
+        self.vip_mode = False        # VIP preemption active
+        self.vip_direction = None    # Direction VIP is traveling
         
         # --- Petri Net Structure: Decoupled Lanes ---
         # For each direction (N, E, S, W), we need:
@@ -53,7 +55,15 @@ class AdaptiveController:
                 "t_end_ry": t_end_ry
             }
             
-    def update(self, dt, vehicle_manager):
+    def update(self, dt, vehicle_manager, vip_active=False, blocked_dirs=None, vip_dir=None):
+        # Handle VIP preemption
+        if vip_active and vip_dir:
+            self.set_vip_preemption(vip_dir, blocked_dirs or [])
+            return  # Skip normal logic during VIP passage
+        elif self.vip_mode and not vip_active:
+            # VIP has passed, restore normal operation
+            self.clear_vip_preemption()
+        
         # 1. Update Petri Net
         fired = self.net.update(dt)
         if fired:
@@ -182,3 +192,41 @@ class AdaptiveController:
         idx = self.approach_pole_map.get(direction)
         if idx is not None:
             self.poles[idx]["state"] = state
+    
+    def set_vip_preemption(self, vip_direction, blocked_directions):
+        """Activate VIP preemption mode - clear path for VIP."""
+        self.vip_mode = True
+        self.vip_direction = vip_direction
+        
+        # Clear all tokens to stop normal operation
+        for d in self.places:
+            self.places[d]["green"].tokens = 0
+            self.places[d]["yellow"].tokens = 0
+            self.places[d]["red_yellow"].tokens = 0
+        
+        # Set all lights to red first
+        for pole in self.poles:
+            pole["state"] = "red"
+        
+        # Set VIP direction to green (clear path)
+        if vip_direction:
+            self.set_pole(vip_direction, "green")
+            # Also set the opposite direction green (same road)
+            opposite = {"N": "S", "S": "N", "E": "W", "W": "E"}
+            if vip_direction in opposite:
+                self.set_pole(opposite[vip_direction], "green")
+    
+    def clear_vip_preemption(self):
+        """Deactivate VIP preemption and return to normal operation."""
+        self.vip_mode = False
+        self.vip_direction = None
+        
+        # Reset to all-red, then bootstrap will kick in
+        for pole in self.poles:
+            pole["state"] = "red"
+        
+        # Clear any lingering tokens
+        for d in self.places:
+            self.places[d]["green"].tokens = 0
+            self.places[d]["yellow"].tokens = 0
+            self.places[d]["red_yellow"].tokens = 0
