@@ -26,7 +26,7 @@ class Metrics:
     def draw(self, surface, font):
         # Draw overlay
         # Background
-        bg_rect = pygame.Rect(10, 80, 220, 110)
+        bg_rect = pygame.Rect(10, 80, 220, 85)
         pygame.draw.rect(surface, (0, 0, 0, 180), bg_rect, border_radius=8)
         pygame.draw.rect(surface, (255, 255, 255), bg_rect, 2, border_radius=8)
         
@@ -36,8 +36,6 @@ class Metrics:
         lines = [
             f"Time: {elapsed:.1f}s",
             f"Max Queue: {self.max_queue_length}",
-            f"Total Throughput: {self.total_cars_exited or 0}",
-            # f"Avg Speed: {0}"
         ]
         
         y = 90

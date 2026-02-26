@@ -864,16 +864,16 @@ class PoliceManager:
         """Draw a flashing arrow at intersection center pointing in convoy travel direction."""
         approach = convoy.approach
         
-        # Flash at ~3Hz
-        flash = (pygame.time.get_ticks() // 160) % 2 == 0
+        # Flash at 1Hz
+        flash = (pygame.time.get_ticks() // 500) % 2 == 0
         if not flash:
             return
         
         cx = self.geometry["cx"]
         cy = self.geometry["cy"]
         
-        arrow_color = (255, 200, 0)  # Bright yellow
-        glow_color = (255, 200, 0, 80)
+        arrow_color = (255, 255, 255)
+        glow_color = (255, 255, 255, 80)
         
         # Arrow centered at intersection, pointing in TRAVEL direction
         ax, ay = cx, cy

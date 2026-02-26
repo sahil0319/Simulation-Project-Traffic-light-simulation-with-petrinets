@@ -7,6 +7,7 @@ from vehicle import VehicleManager
 from pedestrian import PedestrianManager, Pedestrian
 from police import PoliceManager
 from game_modes import AutomaticMode, ManualSurvivalMode, ScenarioChallengeMode
+
 from metrics import Metrics
 
 pygame.init()
@@ -126,6 +127,8 @@ slider_min = 0    # 0 persons per minute
 slider_max = 120  # 120 persons per minute
 slider_dragging = False
 
+
+
 # --- Drawing Helpers ---
 def draw_sidewalk():
     pad = 25
@@ -197,36 +200,240 @@ def draw_ui():
     rate_label = ui_font.render(f"Ped: {rate:.0f}/min", True, (200, 220, 255))
     screen.blit(rate_label, (slider_x + slider_w + 15, slider_y - 8))
 
+def draw_wasd_indicator():
+    """Draw WASD + SPACE key indicator in bottom-right corner, highlighting pressed keys."""
+    keys = pygame.key.get_pressed()
+    
+    key_size = 36
+    gap = 4
+    margin = 60
+    
+    # Base position (bottom-left)
+    base_x = margin
+    base_y = H - margin - (2 * key_size + gap + key_size + gap)  # 2 rows of keys + spacebar
+    
+    # Colors
+    dim_bg = (50, 50, 50)
+    dim_border = (90, 90, 90)
+    dim_text = (120, 120, 120)
+    active_bg = (0, 180, 220)
+    active_border = (0, 230, 255)
+    active_text = (255, 255, 255)
+    
+    key_layout = [
+        # (label, col, row, pygame_key, width)
+        ("W", 1, 0, pygame.K_w, key_size),
+        ("A", 0, 1, pygame.K_a, key_size),
+        ("S", 1, 1, pygame.K_s, key_size),
+        ("D", 2, 1, pygame.K_d, key_size),
+    ]
+    
+    for label, col, row, pkey, w in key_layout:
+        x = base_x + col * (key_size + gap)
+        y = base_y + row * (key_size + gap)
+        pressed = keys[pkey]
+        
+        bg = active_bg if pressed else dim_bg
+        border = active_border if pressed else dim_border
+        txt_col = active_text if pressed else dim_text
+        
+        rect = pygame.Rect(x, y, w, key_size)
+        pygame.draw.rect(screen, bg, rect, border_radius=6)
+        pygame.draw.rect(screen, border, rect, 2, border_radius=6)
+        
+        txt = ui_font.render(label, True, txt_col)
+        txt_rect = txt.get_rect(center=rect.center)
+        screen.blit(txt, txt_rect)
+    
+    # Spacebar row below WASD
+    space_y = base_y + 2 * (key_size + gap)
+    space_w = 3 * key_size + 2 * gap
+    space_pressed = keys[pygame.K_SPACE]
+    
+    bg = active_bg if space_pressed else dim_bg
+    border = active_border if space_pressed else dim_border
+    txt_col = active_text if space_pressed else dim_text
+    
+    space_rect = pygame.Rect(base_x, space_y, space_w, key_size)
+    pygame.draw.rect(screen, bg, space_rect, border_radius=6)
+    pygame.draw.rect(screen, border, space_rect, 2, border_radius=6)
+    
+    space_txt = ui_font.render("SPACE", True, txt_col)
+    space_txt_rect = space_txt.get_rect(center=space_rect.center)
+    screen.blit(space_txt, space_txt_rect)
+
+# =========================
+# 1) MENU UI HELPERS (PASTE ABOVE MAIN LOOP)
+# =========================
+
+class Button:
+    def __init__(self, rect: pygame.Rect, text: str, font, on_click=None):
+        self.rect = rect
+        self.text = text
+        self.font = font
+        self.on_click = on_click
+        self.hover = False
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEMOTION:
+            self.hover = self.rect.collidepoint(event.pos)
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.rect.collidepoint(event.pos):
+                if self.on_click:
+                    self.on_click()
+                return True
+        return False
+
+    def draw(self, surf, *, fg=(230, 230, 230)):
+        # Simple style (no extra deps)
+        bg = (70, 70, 70) if not self.hover else (90, 90, 90)
+        border = (160, 160, 160) if not self.hover else (220, 220, 220)
+        pygame.draw.rect(surf, bg, self.rect, border_radius=10)
+        pygame.draw.rect(surf, border, self.rect, 2, border_radius=10)
+
+        txt = self.font.render(self.text, True, fg)
+        txt_rect = txt.get_rect(center=self.rect.center)
+        surf.blit(txt, txt_rect)
+
+
+def draw_dim_overlay(surf, alpha=160):
+    overlay = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, alpha))
+    surf.blit(overlay, (0, 0))
+
+
+
+# =========================
+# 2) MENU STATE + BUTTONS (PASTE NEAR OTHER GLOBALS, BEFORE MAIN LOOP)
+# =========================
+
+GAME_MENU = "menu"
+GAME_SETTINGS = "settings"
+GAME_RUNNING = "running"
+
+game_state = GAME_MENU
+
+title_font = pygame.font.Font(FONT_PATH, 70)
+menu_font = pygame.font.Font(FONT_PATH, 38)
+
+# Background should always be Automatic mode while menu/settings is open
+BACKGROUND_MODE_IDX = 0
+
+def set_state(new_state):
+    global game_state, current_mode_idx, selected_pole, metrics
+    game_state = new_state
+
+    # If they start the game, put them into normal running flow.
+    # Keep current_mode_idx as-is if you want, but most games start in Automatic.
+    if new_state == GAME_RUNNING:
+        # Start game in the normal mode system (you can change this if you want)
+        current_mode_idx = BACKGROUND_MODE_IDX
+        selected_pole = None
+        metrics = Metrics()
+
+def on_start():
+    set_state(GAME_RUNNING)
+
+def on_settings():
+    set_state(GAME_SETTINGS)
+
+def on_quit():
+    pygame.quit()
+    exit()
+
+def on_back_to_menu():
+    set_state(GAME_MENU)
+
+# Button layout
+btn_w, btn_h = 260, 58
+btn_x = W // 2 - btn_w // 2
+btn_y0 = H // 2 - 40
+
+btn_start = Button(pygame.Rect(btn_x, btn_y0 + 0*(btn_h+14), btn_w, btn_h), "START", menu_font, on_start)
+btn_settings = Button(pygame.Rect(btn_x, btn_y0 + 1*(btn_h+14), btn_w, btn_h), "SETTINGS", menu_font, on_settings)
+btn_quit = Button(pygame.Rect(btn_x, btn_y0 + 2*(btn_h+14), btn_w, btn_h), "QUIT", menu_font, on_quit)
+
+btn_back = Button(pygame.Rect(20, 20, 160, 50), "BACK", menu_font, on_back_to_menu)
+
+menu_buttons = [btn_start, btn_settings, btn_quit]
+
 # --- Main Loop ---
 running = True
 while running:
     dt = clock.tick(60) / 1000.0
-    
-    # Event Handling
+
+    # ---------------------------------
+    # EVENT HANDLING (REPLACE YOURS)
+    # ---------------------------------
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
             exit()
-            
+
+        # ---------- MENU / SETTINGS input ----------
+        if game_state in (GAME_MENU, GAME_SETTINGS):
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    # ESC in menu -> quit, ESC in settings -> back to menu
+                    if game_state == GAME_MENU:
+                        on_quit()
+                    else:
+                        on_back_to_menu()
+
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    # Enter starts game from menu
+                    if game_state == GAME_MENU:
+                        on_start()
+
+            # Buttons
+            if game_state == GAME_MENU:
+                for b in menu_buttons:
+                    b.handle_event(event)
+
+            if game_state == GAME_SETTINGS:
+                btn_back.handle_event(event)
+
+                # Allow slider changing only in Settings screen (same slider logic you already use)
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    mx, my = event.pos
+                    knob_cx = slider_x + int(((pedestrian_manager.spawn_rate_ppm - slider_min) / max(1, slider_max - slider_min)) * slider_w)
+                    if abs(mx - knob_cx) < 15 and abs(my - (slider_y + slider_h // 2)) < 15:
+                        slider_dragging = True
+
+                if event.type == pygame.MOUSEBUTTONUP:
+                    slider_dragging = False
+
+                if event.type == pygame.MOUSEMOTION and slider_dragging:
+                    mx = event.pos[0]
+                    frac = max(0, min(1, (mx - slider_x) / slider_w))
+                    pedestrian_manager.spawn_rate_ppm = slider_min + frac * (slider_max - slider_min)
+
+            # IMPORTANT: while in menu/settings, DO NOT let gameplay inputs run
+            continue
+
+        # ---------- RUNNING (your original inputs, unchanged) ----------
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_m:
                 current_mode_idx = (current_mode_idx + 1) % len(modes)
                 metrics = Metrics()
-            
-            # V key spawns VIP convoy
+                if isinstance(modes[current_mode_idx], ManualSurvivalMode):
+                    selected_pole = 0
+                else:
+                    selected_pole = None
+
             if event.key == pygame.K_v:
                 police_manager.spawn_vip_convoy()
-            
+
             new_selection = modes[current_mode_idx].handle_input(event, selected_pole)
             if new_selection is not None:
                 selected_pole = new_selection
-            
+
             if event.key == pygame.K_ESCAPE:
                 selected_pole = None
 
         if event.type == pygame.MOUSEBUTTONDOWN:
             mx, my = event.pos
-            # Check slider interaction
             knob_cx = slider_x + int(((pedestrian_manager.spawn_rate_ppm - slider_min) / max(1, slider_max - slider_min)) * slider_w)
             if abs(mx - knob_cx) < 15 and abs(my - (slider_y + slider_h // 2)) < 15:
                 slider_dragging = True
@@ -235,140 +442,169 @@ while running:
                     rect = pygame.Rect(p["pos"][0]-20, p["pos"][1]-20, 40, 110)
                     if rect.collidepoint(mx, my):
                         selected_pole = i
-        
+
         if event.type == pygame.MOUSEBUTTONUP:
             slider_dragging = False
-        
+
         if event.type == pygame.MOUSEMOTION and slider_dragging:
             mx = event.pos[0]
             frac = max(0, min(1, (mx - slider_x) / slider_w))
             pedestrian_manager.spawn_rate_ppm = slider_min + frac * (slider_max - slider_min)
 
     # Update
-    current_mode = modes[current_mode_idx]
-    
-    # Update police/VIP system first
+      # Background simulation mode while menu/settings is open:
+    if game_state in (GAME_MENU, GAME_SETTINGS):
+        current_mode = modes[BACKGROUND_MODE_IDX]
+    else:
+        current_mode = modes[current_mode_idx]
+
+    # Update police/VIP system first (same as your logic)
     police_manager.update(dt)
-    
-    # Get blocked directions from VIP convoy
-    blocked_dirs = police_manager.get_blocked_directions()  # For traffic lights (perpendicular)
-    spawn_blocked = police_manager.get_spawn_blocked_directions()  # ALL dirs blocked for spawning
+
+    blocked_dirs = police_manager.get_blocked_directions()
+    spawn_blocked = police_manager.get_spawn_blocked_directions()
     vehicle_manager.set_blocked_directions(spawn_blocked if spawn_blocked else blocked_dirs)
-    
-    # Pass VIP info to vehicles for lane clearing
+
     vehicle_manager.set_vip_info(police_manager.get_vip_info())
     vehicle_manager.set_blocker_rects(police_manager.get_blocker_rects())
-    
-    # Update mode (which updates controller and vehicles)
+
+    # Update mode (controller + vehicles) (same flow)
     current_mode.update(dt, police_manager)
-    
-    # Update pedestrians with current light states, VIP status, and vehicle info
+
+    # Update pedestrians (same flow)
     light_states = current_mode.get_light_states()
     pedestrian_manager.update(dt, light_states, police_manager.is_vip_active(), vehicle_manager.vehicles)
-    
-    metrics.update(vehicle_manager)
+
+    # Metrics only when actually playing (optional; doesn’t change simulation logic)
+    if game_state == GAME_RUNNING:
+        metrics.update(vehicle_manager)
+
     
     # Draw
     screen.fill(BG)
     draw_sidewalk()
-    
-    # Draw roads
+
     pygame.draw.rect(screen, ROAD, vertical_road)
     pygame.draw.rect(screen, ROAD, horizontal_road)
     pygame.draw.rect(screen, (45, 45, 45), intersection)
-    
-    # --- Road Markings ---
-    
-    # helper for double yellow
+
     def draw_double_yellow(start_pos, end_pos):
-        # We'll expect vertical or horizontal lines
-        # Draw two lines 4px apart, centered on the abstract line
-        if start_pos[0] == end_pos[0]: # Vertical
+        if start_pos[0] == end_pos[0]:
             x = start_pos[0]
             pygame.draw.line(screen, YELLOW, (x - 3, start_pos[1]), (x - 3, end_pos[1]), 3)
             pygame.draw.line(screen, YELLOW, (x + 3, start_pos[1]), (x + 3, end_pos[1]), 3)
-        else: # Horizontal
+        else:
             y = start_pos[1]
             pygame.draw.line(screen, YELLOW, (start_pos[0], y - 3), (end_pos[0], y - 3), 3)
             pygame.draw.line(screen, YELLOW, (start_pos[0], y + 3), (end_pos[0], y + 3), 3)
 
-    # helper for dashed white
     def draw_dashed_white(start_pos, end_pos):
-        if start_pos[0] == end_pos[0]: # Vertical
+        if start_pos[0] == end_pos[0]:
             x = start_pos[0]
             for y in range(int(start_pos[1]), int(end_pos[1]), 40):
                 pygame.draw.line(screen, WHITE, (x, y), (x, min(y + 20, end_pos[1])), 2)
-        else: # Horizontal
+        else:
             y = start_pos[1]
             for x in range(int(start_pos[0]), int(end_pos[0]), 40):
                 pygame.draw.line(screen, WHITE, (x, y), (min(x + 20, end_pos[0]), y), 2)
 
-    # 1. Double Yellow Center Lines
-    draw_double_yellow((cx, 0), (cx, cy - cross_size//2)) # Top
-    draw_double_yellow((cx, cy + cross_size//2), (cx, H)) # Bottom
-    draw_double_yellow((0, cy), (cx - cross_size//2, cy)) # Left
-    draw_double_yellow((cx + cross_size//2, cy), (W, cy)) # Right
+    draw_double_yellow((cx, 0), (cx, cy - cross_size//2))
+    draw_double_yellow((cx, cy + cross_size//2), (cx, H))
+    draw_double_yellow((0, cy), (cx - cross_size//2, cy))
+    draw_double_yellow((cx + cross_size//2, cy), (W, cy))
 
-    # 2. Lane Dividers (Dashed White) - separating Lane 1 (Inner) and Lane 2 (Outer)
-    # Road Width 220. Center cx. Half 110. Lanes roughly 55 wide.
-    # Divider is at cx +/- 55.
-    
-    # Vertical Road
-    draw_dashed_white((cx - 55, 0), (cx - 55, cy - cross_size//2)) # Top Left (N-bound Incoming)
-    draw_dashed_white((cx + 55, 0), (cx + 55, cy - cross_size//2)) # Top Right (N-bound Outgoing)
-    
-    draw_dashed_white((cx - 55, cy + cross_size//2), (cx - 55, H)) # Bottom Left (S-bound Outgoing)
-    draw_dashed_white((cx + 55, cy + cross_size//2), (cx + 55, H)) # Bottom Right (S-bound Incoming)
+    draw_dashed_white((cx - 55, 0), (cx - 55, cy - cross_size//2))
+    draw_dashed_white((cx + 55, 0), (cx + 55, cy - cross_size//2))
+    draw_dashed_white((cx - 55, cy + cross_size//2), (cx - 55, H))
+    draw_dashed_white((cx + 55, cy + cross_size//2), (cx + 55, H))
 
-    # Horizontal Road
-    draw_dashed_white((0, cy - 55), (cx - cross_size//2, cy - 55)) # Left Top (W-bound Outgoing)
-    draw_dashed_white((0, cy + 55), (cx - cross_size//2, cy + 55)) # Left Bottom (W-bound Incoming)
-    
-    draw_dashed_white((cx + cross_size//2, cy - 55), (W, cy - 55)) # Right Top (E-bound Incoming)
-    draw_dashed_white((cx + cross_size//2, cy + 55), (W, cy + 55)) # Right Bottom (E-bound Outgoing)
+    draw_dashed_white((0, cy - 55), (cx - cross_size//2, cy - 55))
+    draw_dashed_white((0, cy + 55), (cx - cross_size//2, cy + 55))
+    draw_dashed_white((cx + cross_size//2, cy - 55), (W, cy - 55))
+    draw_dashed_white((cx + cross_size//2, cy + 55), (W, cy + 55))
 
-    # 3. Shoulder Lines (Solid White) at Road Edges
-    # Edges at cx +/- 110
-    
-    # Vertical
-    pygame.draw.line(screen, WHITE, (cx - 110, 0), (cx - 110, cy - cross_size//2), 3) # Top Left Edge
-    pygame.draw.line(screen, WHITE, (cx + 110, 0), (cx + 110, cy - cross_size//2), 3) # Top Right Edge
-    pygame.draw.line(screen, WHITE, (cx - 110, cy + cross_size//2), (cx - 110, H), 3) # Bottom Left Edge
-    pygame.draw.line(screen, WHITE, (cx + 110, cy + cross_size//2), (cx + 110, H), 3) # Bottom Right Edge
-    
-    # Horizontal
-    pygame.draw.line(screen, WHITE, (0, cy - 110), (cx - cross_size//2, cy - 110), 3) # Left Top Edge
-    pygame.draw.line(screen, WHITE, (0, cy + 110), (cx - cross_size//2, cy + 110), 3) # Left Bottom Edge
-    pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy - 110), (W, cy - 110), 3) # Right Top Edge
-    pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy + 110), (W, cy + 110), 3) # Right Bottom Edge
-    
-    # Crosswalks (Restored stripes)
+    pygame.draw.line(screen, WHITE, (cx - 110, 0), (cx - 110, cy - cross_size//2), 3)
+    pygame.draw.line(screen, WHITE, (cx + 110, 0), (cx + 110, cy - cross_size//2), 3)
+    pygame.draw.line(screen, WHITE, (cx - 110, cy + cross_size//2), (cx - 110, H), 3)
+    pygame.draw.line(screen, WHITE, (cx + 110, cy + cross_size//2), (cx + 110, H), 3)
+
+    pygame.draw.line(screen, WHITE, (0, cy - 110), (cx - cross_size//2, cy - 110), 3)
+    pygame.draw.line(screen, WHITE, (0, cy + 110), (cx - cross_size//2, cy + 110), 3)
+    pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy - 110), (W, cy - 110), 3)
+    pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy + 110), (W, cy + 110), 3)
+
     draw_crosswalk_horizontal(intersection.top - 55, cx - road_width // 2 + 20, cx + road_width // 2 - 20)
     draw_crosswalk_horizontal(intersection.bottom + 25, cx - road_width // 2 + 20, cx + road_width // 2 - 20)
     draw_crosswalk_vertical(intersection.left - 55, cy - road_width // 2 + 20, cy + road_width // 2 - 20)
     draw_crosswalk_vertical(intersection.right + 25, cy - road_width // 2 + 20, cy + road_width // 2 - 20)
 
-    # Stop lines (Restored relative dimensions)
     stop_len = road_width - 40
     pygame.draw.rect(screen, WHITE, pygame.Rect(cx - stop_len//2, stop_y_N, stop_len, 8))
     pygame.draw.rect(screen, WHITE, pygame.Rect(cx - stop_len//2, stop_y_S, stop_len, 8))
     pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_W, cy - stop_len//2, 8, stop_len))
     pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_E, cy - stop_len//2, 8, stop_len))
 
-    # Entities — draw pedestrians UNDER vehicles so cars appear on top
     pedestrian_manager.draw(screen)
     vehicle_manager.draw(screen)
-    police_manager.draw(screen)  # Draw VIP convoy and police on top
+    police_manager.draw(screen)
 
-    # Traffic Lights
     for i, p in enumerate(poles):
         draw_light(p["pos"][0], p["pos"][1], p["state"])
-        if selected_pole == i:
-             pygame.draw.rect(screen, WHITE, (p["pos"][0]-20, p["pos"][1]-20, 40, 110), 2)
+        if game_state == GAME_RUNNING and selected_pole == i:
+            pygame.draw.rect(screen, WHITE, (p["pos"][0]-20, p["pos"][1]-20, 40, 110), 2)
 
-    # UI
-    draw_ui()
-    metrics.draw(screen, ui_font)
+    # Normal UI only during gameplay
+    if game_state == GAME_RUNNING:
+        draw_ui()
+        metrics.draw(screen, ui_font)
+        if isinstance(modes[current_mode_idx], ManualSurvivalMode):
+            draw_wasd_indicator()
+
+    # -------- MENU OVERLAYS --------
+    if game_state == GAME_MENU:
+        draw_dim_overlay(screen, alpha=160)
+
+        title = title_font.render("PETRI NET TRAFFIC", True, (240, 240, 240))
+        sub = ui_font.render("Menu running on live Automatic simulation", True, (200, 200, 200))
+
+        title_rect = title.get_rect(center=(W//2, H//2 - 170))
+        sub_rect = sub.get_rect(center=(W//2, H//2 - 120))
+        screen.blit(title, title_rect)
+        screen.blit(sub, sub_rect)
+
+        for b in menu_buttons:
+            b.draw(screen)
+
+        hint = ui_font.render("ENTER = Start   ESC = Quit", True, (180, 180, 180))
+        screen.blit(hint, (W//2 - hint.get_width()//2, H - 60))
+
+    elif game_state == GAME_SETTINGS:
+        draw_dim_overlay(screen, alpha=160)
+
+        title = title_font.render("SETTINGS", True, (240, 240, 240))
+        title_rect = title.get_rect(center=(W//2, 120))
+        screen.blit(title, title_rect)
+
+        # Reuse your slider UI so settings are real (Ped spawn rate)
+        # Just draw it here + a label
+        info = ui_font.render("Adjust Pedestrian Spawn Rate:", True, (220, 220, 255))
+        screen.blit(info, (slider_x, slider_y - 50))
+
+        # Draw slider exactly like draw_ui does, but standalone
+        pygame.draw.rect(screen, (60, 60, 60), (slider_x, slider_y, slider_w, slider_h), border_radius=4)
+        rate = pedestrian_manager.spawn_rate_ppm
+        fill_frac = (rate - slider_min) / max(1, slider_max - slider_min)
+        fill_w = int(fill_frac * slider_w)
+        pygame.draw.rect(screen, (100, 200, 255), (slider_x, slider_y, fill_w, slider_h), border_radius=4)
+        knob_x = slider_x + fill_w
+        pygame.draw.circle(screen, (255, 255, 255), (knob_x, slider_y + slider_h // 2), 8)
+        pygame.draw.circle(screen, (100, 200, 255), (knob_x, slider_y + slider_h // 2), 6)
+        rate_label = ui_font.render(f"Ped: {rate:.0f}/min", True, (200, 220, 255))
+        screen.blit(rate_label, (slider_x + slider_w + 15, slider_y - 8))
+
+        btn_back.draw(screen)
+        hint = ui_font.render("ESC = Back to Menu", True, (180, 180, 180))
+        screen.blit(hint, (20, 80))
 
     pygame.display.flip()
 
