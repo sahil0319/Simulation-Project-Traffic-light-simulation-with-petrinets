@@ -6,6 +6,7 @@ from adaptive_controller import AdaptiveController
 from vehicle import VehicleManager
 from pedestrian import PedestrianManager, Pedestrian
 from police import PoliceManager
+from accident import AccidentManager
 from game_modes import AutomaticMode, ManualSurvivalMode, ScenarioChallengeMode
 from metrics import Metrics
 
@@ -102,6 +103,7 @@ geometry = {
 vehicle_manager = VehicleManager(road_info)
 pedestrian_manager = PedestrianManager(road_info, geometry)
 police_manager = PoliceManager(road_info, geometry)
+accident_manager = AccidentManager(road_info, geometry)
 controller = AdaptiveController(poles, approach_map)
 controller.apply_states()
 metrics = Metrics()
@@ -158,7 +160,7 @@ def draw_crosswalk_vertical(x, y_start, y_end, stripe_h=10, gap=8):
 
 def draw_ui():
     mode_name = modes[current_mode_idx].name
-    lbl = ui_font.render(f"Mode: {mode_name} (Press M to switch, V for VIP)", True, WHITE)
+    lbl = ui_font.render(f"Mode: {mode_name} (M=switch, V=VIP, A=Accident)", True, WHITE)
     screen.blit(lbl, (20, 20))
     
     if selected_pole is not None:
@@ -217,6 +219,10 @@ while running:
             if event.key == pygame.K_v:
                 police_manager.spawn_vip_convoy()
             
+            # A key triggers accident
+            if event.key == pygame.K_a:
+                accident_manager.trigger_accident(vehicle_manager, pedestrian_manager)
+            
             new_selection = modes[current_mode_idx].handle_input(event, selected_pole)
             if new_selection is not None:
                 selected_pole = new_selection
@@ -250,6 +256,9 @@ while running:
     # Update police/VIP system first
     police_manager.update(dt)
     
+    # Update accident system
+    accident_manager.update(dt, vehicle_manager, pedestrian_manager)
+    
     # Get blocked directions from VIP convoy
     blocked_dirs = police_manager.get_blocked_directions()  # For traffic lights (perpendicular)
     spawn_blocked = police_manager.get_spawn_blocked_directions()  # ALL dirs blocked for spawning
@@ -259,14 +268,17 @@ while running:
     vehicle_manager.set_vip_info(police_manager.get_vip_info())
     vehicle_manager.set_blocker_rects(police_manager.get_blocker_rects())
     
+    # Pass accident blockers to vehicles
+    vehicle_manager.set_accident_blockers(accident_manager.get_blocker_rects())
+    
     # Update mode (which updates controller and vehicles)
-    current_mode.update(dt, police_manager)
+    current_mode.update(dt, police_manager, accident_manager)
     
     # Update pedestrians with current light states, VIP status, and vehicle info
     light_states = current_mode.get_light_states()
     pedestrian_manager.update(dt, light_states, police_manager.is_vip_active(), vehicle_manager.vehicles)
     
-    metrics.update(vehicle_manager)
+    metrics.update(vehicle_manager, accident_manager)
     
     # Draw
     screen.fill(BG)
@@ -359,6 +371,7 @@ while running:
     pedestrian_manager.draw(screen)
     vehicle_manager.draw(screen)
     police_manager.draw(screen)  # Draw VIP convoy and police on top
+    accident_manager.draw(screen)  # Draw accident scenes on top of everything
 
     # Traffic Lights
     for i, p in enumerate(poles):

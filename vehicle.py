@@ -173,7 +173,7 @@ class Vehicle:
         
         self.rect.center = (self.x, self.y)
 
-    def move(self, dt, vehicle_ahead, stop_line_pos, light_state, all_vehicles=None, active_crosswalks=None, vip_info=None, blocker_rects=None):
+    def move(self, dt, vehicle_ahead, stop_line_pos, light_state, all_vehicles=None, active_crosswalks=None, vip_info=None, blocker_rects=None, accident_blockers=None):
         target_speed = self.max_speed
         
         # Ambulance ignores red lights? Or just stops if blocked?
@@ -262,6 +262,26 @@ class Vehicle:
             if box:
                 for br in blocker_rects:
                     if box.colliderect(br):
+                        target_speed = 0
+                        self.speed = 0
+                        break
+
+        # Accident blocker collision avoidance — stop before accident scene
+        if accident_blockers:
+            safety_dist = 90
+            box = None
+            if self.approach == "N":
+                box = pygame.Rect(self.x - 20, self.y + self.length/2, 40, safety_dist)
+            elif self.approach == "S":
+                box = pygame.Rect(self.x - 20, self.y - self.length/2 - safety_dist, 40, safety_dist)
+            elif self.approach == "E":
+                box = pygame.Rect(self.x - self.length/2 - safety_dist, self.y - 20, safety_dist, 40)
+            elif self.approach == "W":
+                box = pygame.Rect(self.x + self.length/2, self.y - 20, safety_dist, 40)
+            
+            if box:
+                for ar in accident_blockers:
+                    if box.colliderect(ar):
                         target_speed = 0
                         self.speed = 0
                         break
@@ -432,6 +452,10 @@ class VehicleManager:
         """Set police blocker rects for vehicle collision avoidance."""
         self.blocker_rects = rects
     
+    def set_accident_blockers(self, rects):
+        """Set accident blocker rects for vehicle collision avoidance."""
+        self.accident_blockers = rects
+    
     def update(self, dt, light_states, active_crosswalks=None):
         self.spawn_timer -= dt
         if self.spawn_timer <= 0:
@@ -481,7 +505,7 @@ class VehicleManager:
                         vehicle_ahead = other
                         break
                 
-                vehicle.move(dt, vehicle_ahead, stop_line, light, all_vehicles=all_vehicles_list, active_crosswalks=active_crosswalks, vip_info=self.vip_info, blocker_rects=getattr(self, 'blocker_rects', []))
+                vehicle.move(dt, vehicle_ahead, stop_line, light, all_vehicles=all_vehicles_list, active_crosswalks=active_crosswalks, vip_info=self.vip_info, blocker_rects=getattr(self, 'blocker_rects', []), accident_blockers=getattr(self, 'accident_blockers', []))
                 
                 # Check bounds (keep if within reasonable area)
                 # W=1000, H=700
