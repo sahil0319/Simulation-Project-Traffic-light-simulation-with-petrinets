@@ -24,11 +24,16 @@ class AutomaticMode(GameMode):
         super().__init__(controller, vehicle_manager, pedestrian_manager)
         self.name = "Automatic"
 
-    def update(self, dt, police_manager=None):
+    def update(self, dt, police_manager=None, accident_manager=None):
         # Check for VIP preemption
         vip_active = police_manager.is_vip_active() if police_manager else False
         blocked_dirs = police_manager.get_blocked_directions() if police_manager else []
         vip_dir = police_manager.get_vip_direction() if police_manager else None
+        
+        # Combine accident blocked directions
+        if accident_manager:
+            accident_blocked = accident_manager.get_blocked_directions()
+            blocked_dirs = list(set(blocked_dirs + accident_blocked))
         
         # Controller decides everything (with VIP override)
         self.controller.update(dt, self.vehicle_manager, vip_active, blocked_dirs, vip_dir)
@@ -56,11 +61,16 @@ class ManualSurvivalMode(GameMode):
         super().__init__(controller, vehicle_manager, pedestrian_manager)
         self.name = "Manual Survival"
 
-    def update(self, dt, police_manager=None):
+    def update(self, dt, police_manager=None, accident_manager=None):
         # Check for VIP preemption (forces lights even in manual mode)
         vip_active = police_manager.is_vip_active() if police_manager else False
         blocked_dirs = police_manager.get_blocked_directions() if police_manager else []
         vip_dir = police_manager.get_vip_direction() if police_manager else None
+        
+        # Combine accident blocked directions
+        if accident_manager:
+            accident_blocked = accident_manager.get_blocked_directions()
+            blocked_dirs = list(set(blocked_dirs + accident_blocked))
         
         if vip_active:
             # VIP overrides manual control
@@ -123,13 +133,18 @@ class ScenarioChallengeMode(GameMode):
         self.name = "Challenge: Rush Hour"
         self.time_elapsed = 0
         
-    def update(self, dt, police_manager=None):
+    def update(self, dt, police_manager=None, accident_manager=None):
         self.time_elapsed += dt
         
         # Check for VIP preemption
         vip_active = police_manager.is_vip_active() if police_manager else False
         blocked_dirs = police_manager.get_blocked_directions() if police_manager else []
         vip_dir = police_manager.get_vip_direction() if police_manager else None
+        
+        # Combine accident blocked directions
+        if accident_manager:
+            accident_blocked = accident_manager.get_blocked_directions()
+            blocked_dirs = list(set(blocked_dirs + accident_blocked))
         
         # Adaptive controller runs (with VIP override)
         self.controller.update(dt, self.vehicle_manager, vip_active, blocked_dirs, vip_dir)
