@@ -183,6 +183,73 @@ def draw_crosswalk_vertical(x, y_start, y_end, stripe_h=10, gap=8):
         pygame.draw.rect(screen, WHITE, (x, y, 30, stripe_h))
         y += stripe_h + gap
 
+def draw_key_button(x, y, label, w=36, h=36, active=False):
+    """Draw a single keyboard-style button."""
+    bg = (80, 80, 80) if not active else (100, 200, 255)
+    border = (140, 140, 140) if not active else (150, 230, 255)
+    text_col = (220, 220, 220) if not active else (20, 20, 20)
+    # Shadow
+    pygame.draw.rect(screen, (30, 30, 30), (x + 2, y + 2, w, h), border_radius=5)
+    # Body
+    pygame.draw.rect(screen, bg, (x, y, w, h), border_radius=5)
+    # Border
+    pygame.draw.rect(screen, border, (x, y, w, h), 2, border_radius=5)
+    # Label
+    small_font = pygame.font.Font(FONT_PATH, 22)
+    lbl_surf = small_font.render(label, True, text_col)
+    lbl_rect = lbl_surf.get_rect(center=(x + w // 2, y + h // 2))
+    screen.blit(lbl_surf, lbl_rect)
+
+
+def draw_controls_overlay():
+    """Draw WASD + Space overlay and Shift+</> hint in the bottom-right."""
+    # --- Panel background ---
+    panel_w, panel_h = 180, 140
+    panel_x = W - panel_w - 15
+    panel_y = H - panel_h - 45
+    overlay_surf = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+    overlay_surf.fill((25, 25, 25, 180))
+    screen.blit(overlay_surf, (panel_x, panel_y))
+    pygame.draw.rect(screen, (100, 200, 255), (panel_x, panel_y, panel_w, panel_h), 1, border_radius=6)
+
+    # Title
+    tiny_font = pygame.font.Font(FONT_PATH, 18)
+    title = tiny_font.render("Controls", True, (100, 200, 255))
+    screen.blit(title, (panel_x + panel_w // 2 - title.get_width() // 2, panel_y + 4))
+
+    # WASD layout
+    key_size = 28
+    gap = 3
+    # Center the WASD cluster in the panel
+    cluster_w = key_size * 3 + gap * 2
+    bx = panel_x + (panel_w - cluster_w) // 2 - 30
+    by = panel_y + 24
+
+    # Which key corresponds to which pole movement is active
+    draw_key_button(bx + key_size + gap, by, "W", key_size, key_size)  # W top-center
+    draw_key_button(bx, by + key_size + gap, "A", key_size, key_size)  # A left
+    draw_key_button(bx + key_size + gap, by + key_size + gap, "S", key_size, key_size)  # S center
+    draw_key_button(bx + (key_size + gap) * 2, by + key_size + gap, "D", key_size, key_size)  # D right
+
+    # Space bar
+    space_w = key_size * 3 + gap * 2
+    space_y = by + (key_size + gap) * 2
+    draw_key_button(bx, space_y, "SPACE", space_w, key_size)
+
+    # Labels on the right side of WASD cluster
+    hint_font = pygame.font.Font(FONT_PATH, 16)
+    hint_x = bx + cluster_w + 12
+    nav_hint = hint_font.render("Select", True, (160, 160, 160))
+    screen.blit(nav_hint, (hint_x, by + key_size // 2))
+    space_hint = hint_font.render("Toggle", True, (160, 160, 160))
+    screen.blit(space_hint, (hint_x, space_y + 4))
+
+    # Shift + < / > hint for pedestrian rate
+    rate_y = space_y + key_size + 8
+    shift_hint = hint_font.render("Shift+</>  Ped Rate", True, (160, 160, 160))
+    screen.blit(shift_hint, (panel_x + 10, rate_y))
+
+
 def draw_ui():
     mode_name = modes[current_mode_idx].name
     lbl = ui_font.render(f"Mode: {mode_name} (M=switch, V=VIP, A=Accident)", True, WHITE)
@@ -219,6 +286,10 @@ def draw_ui():
     pygame.draw.circle(screen, (100, 200, 255), (knob_x, slider_y + slider_h // 2), 6)
     rate_label = ui_font.render(f"Ped: {rate:.0f}/min", True, (200, 220, 255))
     screen.blit(rate_label, (slider_x + slider_w + 15, slider_y - 8))
+
+    # --- Controls overlay (Manual Survival mode only) ---
+    if modes[current_mode_idx].name == "Manual Survival":
+        draw_controls_overlay()
 
     # ESC hint
     esc_txt = ui_font.render("[ESC] Back to Menu", True, (100, 100, 100))
@@ -294,6 +365,20 @@ while running:
                 
                 if event.key == pygame.K_a:
                     accident_manager.trigger_accident(vehicle_manager, pedestrian_manager)
+                
+                # Shift+> and Shift+< to adjust pedestrian spawn rate
+                if event.key == pygame.K_PERIOD and (event.mod & pygame.KMOD_SHIFT):
+                    new_rate = min(slider_max, pedestrian_manager.spawn_rate_ppm + 15)
+                    pedestrian_manager.spawn_rate_ppm = new_rate
+                    if tracker:
+                        vehicle_manager.flush_wait_times()
+                        tracker.record_ped_rate_change(new_rate)
+                elif event.key == pygame.K_COMMA and (event.mod & pygame.KMOD_SHIFT):
+                    new_rate = max(slider_min, pedestrian_manager.spawn_rate_ppm - 15)
+                    pedestrian_manager.spawn_rate_ppm = new_rate
+                    if tracker:
+                        vehicle_manager.flush_wait_times()
+                        tracker.record_ped_rate_change(new_rate)
                 
                 new_selection = modes[current_mode_idx].handle_input(event, selected_pole)
                 if new_selection is not None:
