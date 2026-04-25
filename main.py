@@ -11,6 +11,7 @@ from game_modes import AutomaticMode, ManualSurvivalMode, ScenarioChallengeMode
 from metrics import Metrics
 from stats_tracker import StatsTracker
 from screens import MenuScreen, StatsScreen
+from petri_screen import PetriNetRenderer
 
 pygame.init()
 
@@ -19,7 +20,7 @@ FONT_PATH = "font/Pixeltype.ttf"
 ui_font = pygame.font.Font(FONT_PATH, 30)
 
 # --- Window ---
-W, H = 1000, 700
+W, H = 1200, 800
 screen = pygame.display.set_mode((W, H))
 pygame.display.set_caption("Petri Net Traffic Controller")
 clock = pygame.time.Clock()
@@ -81,7 +82,9 @@ geometry = {
 # --- Screens ---
 menu_screen = MenuScreen(W, H, FONT_PATH)
 stats_screen = StatsScreen(W, H, FONT_PATH)
+petri_renderer = PetriNetRenderer(W, H, FONT_PATH)
 last_tracker = None  # Stats from last run
+show_petri_net = False
 
 # --- State ---
 STATE_MENU = "menu"
@@ -393,6 +396,9 @@ while running:
                     end_game()
                     continue
 
+                if event.key == pygame.K_p:
+                    show_petri_net = not show_petri_net
+
                 if event.key == pygame.K_m:
                     current_mode_idx = (current_mode_idx + 1) % len(modes)
                     metrics = Metrics()
@@ -512,12 +518,19 @@ while running:
         metrics.update(dt, vehicle_manager, accident_manager)
         
         # Draw
-        screen.fill(BG)
-        draw_sidewalk()
-        
-        pygame.draw.rect(screen, ROAD, vertical_road)
-        pygame.draw.rect(screen, ROAD, horizontal_road)
-        pygame.draw.rect(screen, (45, 45, 45), intersection)
+        if show_petri_net:
+            net = None
+            if hasattr(current_mode, 'controller') and hasattr(current_mode.controller, 'net'):
+                net = current_mode.controller.net
+            active_dir = getattr(current_mode.controller, 'active_direction', None) if hasattr(current_mode, 'controller') else None
+            petri_renderer.draw(screen, net, active_dir)
+        else:
+            screen.fill(BG)
+            draw_sidewalk()
+            
+            pygame.draw.rect(screen, ROAD, vertical_road)
+            pygame.draw.rect(screen, ROAD, horizontal_road)
+            pygame.draw.rect(screen, (45, 45, 45), intersection)
         
         # --- Road Markings ---
         def draw_double_yellow(start_pos, end_pos):
@@ -540,51 +553,52 @@ while running:
                 for x in range(int(start_pos[0]), int(end_pos[0]), 40):
                     pygame.draw.line(screen, WHITE, (x, y), (min(x + 20, end_pos[0]), y), 2)
 
-        draw_double_yellow((cx, 0), (cx, cy - cross_size//2))
-        draw_double_yellow((cx, cy + cross_size//2), (cx, H))
-        draw_double_yellow((0, cy), (cx - cross_size//2, cy))
-        draw_double_yellow((cx + cross_size//2, cy), (W, cy))
+        if not show_petri_net:
+            draw_double_yellow((cx, 0), (cx, cy - cross_size//2))
+            draw_double_yellow((cx, cy + cross_size//2), (cx, H))
+            draw_double_yellow((0, cy), (cx - cross_size//2, cy))
+            draw_double_yellow((cx + cross_size//2, cy), (W, cy))
 
-        draw_dashed_white((cx - 55, 0), (cx - 55, cy - cross_size//2))
-        draw_dashed_white((cx + 55, 0), (cx + 55, cy - cross_size//2))
-        draw_dashed_white((cx - 55, cy + cross_size//2), (cx - 55, H))
-        draw_dashed_white((cx + 55, cy + cross_size//2), (cx + 55, H))
+            draw_dashed_white((cx - 55, 0), (cx - 55, cy - cross_size//2))
+            draw_dashed_white((cx + 55, 0), (cx + 55, cy - cross_size//2))
+            draw_dashed_white((cx - 55, cy + cross_size//2), (cx - 55, H))
+            draw_dashed_white((cx + 55, cy + cross_size//2), (cx + 55, H))
 
-        draw_dashed_white((0, cy - 55), (cx - cross_size//2, cy - 55))
-        draw_dashed_white((0, cy + 55), (cx - cross_size//2, cy + 55))
-        draw_dashed_white((cx + cross_size//2, cy - 55), (W, cy - 55))
-        draw_dashed_white((cx + cross_size//2, cy + 55), (W, cy + 55))
+            draw_dashed_white((0, cy - 55), (cx - cross_size//2, cy - 55))
+            draw_dashed_white((0, cy + 55), (cx - cross_size//2, cy + 55))
+            draw_dashed_white((cx + cross_size//2, cy - 55), (W, cy - 55))
+            draw_dashed_white((cx + cross_size//2, cy + 55), (W, cy + 55))
 
-        pygame.draw.line(screen, WHITE, (cx - 110, 0), (cx - 110, cy - cross_size//2), 3)
-        pygame.draw.line(screen, WHITE, (cx + 110, 0), (cx + 110, cy - cross_size//2), 3)
-        pygame.draw.line(screen, WHITE, (cx - 110, cy + cross_size//2), (cx - 110, H), 3)
-        pygame.draw.line(screen, WHITE, (cx + 110, cy + cross_size//2), (cx + 110, H), 3)
+            pygame.draw.line(screen, WHITE, (cx - 110, 0), (cx - 110, cy - cross_size//2), 3)
+            pygame.draw.line(screen, WHITE, (cx + 110, 0), (cx + 110, cy - cross_size//2), 3)
+            pygame.draw.line(screen, WHITE, (cx - 110, cy + cross_size//2), (cx - 110, H), 3)
+            pygame.draw.line(screen, WHITE, (cx + 110, cy + cross_size//2), (cx + 110, H), 3)
 
-        pygame.draw.line(screen, WHITE, (0, cy - 110), (cx - cross_size//2, cy - 110), 3)
-        pygame.draw.line(screen, WHITE, (0, cy + 110), (cx - cross_size//2, cy + 110), 3)
-        pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy - 110), (W, cy - 110), 3)
-        pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy + 110), (W, cy + 110), 3)
-        
-        draw_crosswalk_horizontal(intersection.top - 55, cx - road_width // 2 + 20, cx + road_width // 2 - 20)
-        draw_crosswalk_horizontal(intersection.bottom + 25, cx - road_width // 2 + 20, cx + road_width // 2 - 20)
-        draw_crosswalk_vertical(intersection.left - 55, cy - road_width // 2 + 20, cy + road_width // 2 - 20)
-        draw_crosswalk_vertical(intersection.right + 25, cy - road_width // 2 + 20, cy + road_width // 2 - 20)
+            pygame.draw.line(screen, WHITE, (0, cy - 110), (cx - cross_size//2, cy - 110), 3)
+            pygame.draw.line(screen, WHITE, (0, cy + 110), (cx - cross_size//2, cy + 110), 3)
+            pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy - 110), (W, cy - 110), 3)
+            pygame.draw.line(screen, WHITE, (cx + cross_size//2, cy + 110), (W, cy + 110), 3)
+            
+            draw_crosswalk_horizontal(intersection.top - 55, cx - road_width // 2 + 20, cx + road_width // 2 - 20)
+            draw_crosswalk_horizontal(intersection.bottom + 25, cx - road_width // 2 + 20, cx + road_width // 2 - 20)
+            draw_crosswalk_vertical(intersection.left - 55, cy - road_width // 2 + 20, cy + road_width // 2 - 20)
+            draw_crosswalk_vertical(intersection.right + 25, cy - road_width // 2 + 20, cy + road_width // 2 - 20)
 
-        stop_len = road_width - 40
-        pygame.draw.rect(screen, WHITE, pygame.Rect(cx - stop_len//2, stop_y_N, stop_len, 8))
-        pygame.draw.rect(screen, WHITE, pygame.Rect(cx - stop_len//2, stop_y_S, stop_len, 8))
-        pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_W, cy - stop_len//2, 8, stop_len))
-        pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_E, cy - stop_len//2, 8, stop_len))
+            stop_len = road_width - 40
+            pygame.draw.rect(screen, WHITE, pygame.Rect(cx - stop_len//2, stop_y_N, stop_len, 8))
+            pygame.draw.rect(screen, WHITE, pygame.Rect(cx - stop_len//2, stop_y_S, stop_len, 8))
+            pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_W, cy - stop_len//2, 8, stop_len))
+            pygame.draw.rect(screen, WHITE, pygame.Rect(stop_x_E, cy - stop_len//2, 8, stop_len))
 
-        pedestrian_manager.draw(screen)
-        vehicle_manager.draw(screen)
-        police_manager.draw(screen)
-        accident_manager.draw(screen)
+            pedestrian_manager.draw(screen)
+            vehicle_manager.draw(screen)
+            police_manager.draw(screen)
+            accident_manager.draw(screen)
 
-        for i, p in enumerate(poles):
-            draw_light(p["pos"][0], p["pos"][1], p["state"])
-            if selected_pole == i:
-                 pygame.draw.rect(screen, WHITE, (p["pos"][0]-20, p["pos"][1]-20, 40, 110), 2)
+            for i, p in enumerate(poles):
+                draw_light(p["pos"][0], p["pos"][1], p["state"])
+                if selected_pole == i:
+                     pygame.draw.rect(screen, WHITE, (p["pos"][0]-20, p["pos"][1]-20, 40, 110), 2)
 
         draw_ui()
         metrics.draw(screen, ui_font)
