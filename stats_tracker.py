@@ -1,6 +1,5 @@
 # stats_tracker.py
 
-import time
 import statistics
 
 
@@ -11,6 +10,7 @@ class StatsTracker:
         self.start_time = None
         self.end_time = None
         self.game_mode = ""
+        self.sim_time = 0.0  # Updated externally each frame
 
         # Vehicle events: list of dicts
         self.vehicle_spawns = []        # {time, type, direction, is_ambulance}
@@ -37,25 +37,25 @@ class StatsTracker:
         self.pedestrian_spawn_rate = 30  # default ppm
 
     def start(self):
-        self.start_time = time.time()
-        self.current_ped_rate_start = self.start_time
+        self.start_time = self.sim_time
+        self.current_ped_rate_start = self.sim_time
 
     def stop(self):
-        self.end_time = time.time()
+        self.end_time = self.sim_time
         self.record_ped_rate_change(self.current_ped_rate) # Close final interval
 
     @property
     def duration(self):
         if self.start_time is None:
             return 0
-        end = self.end_time or time.time()
+        end = self.end_time if self.end_time is not None else self.sim_time
         return end - self.start_time
 
     # --- Recording methods ---
 
     def record_vehicle_spawn(self, vehicle_type, direction, is_ambulance):
         self.vehicle_spawns.append({
-            "time": time.time(),
+            "time": self.sim_time,
             "type": vehicle_type,
             "direction": direction,
             "is_ambulance": is_ambulance,
@@ -75,13 +75,13 @@ class StatsTracker:
 
     def record_vip_spawn(self, direction):
         self.vip_spawns.append({
-            "time": time.time(),
+            "time": self.sim_time,
             "direction": direction,
         })
 
     def record_accident(self, collision_type, direction, fatalities=0, ped_spawn_rate=0):
         self.accident_spawns.append({
-            "time": time.time(),
+            "time": self.sim_time,
             "collision_type": collision_type,
             "direction": direction,
             "fatalities": fatalities,
@@ -90,7 +90,7 @@ class StatsTracker:
 
     def record_ped_rate_change(self, new_rate):
         """Close the current rate interval and start a new one."""
-        now = time.time()
+        now = self.sim_time
         if self.current_ped_rate_start is not None:
             self.ped_rate_intervals.append({
                 "rate_ppm": self.current_ped_rate,
@@ -106,6 +106,11 @@ class StatsTracker:
         for interval in self.ped_rate_intervals:
             r = interval["rate_ppm"]
             rate_durations[r] = rate_durations.get(r, 0) + interval["duration"]
+            
+        if self.current_ped_rate_start is not None:
+            r = self.current_ped_rate
+            rate_durations[r] = rate_durations.get(r, 0) + (self.sim_time - self.current_ped_rate_start)
+            
         return rate_durations
 
     def get_accidents_per_min_by_rate(self):
@@ -125,7 +130,7 @@ class StatsTracker:
         # Compute accidents per minute
         acc_per_min = {}
         for r, dur in rate_durations.items():
-            if dur >= 60: # Only show stats if run for at least 60 cumulative seconds
+            if dur >= 59.0: # Only show stats if run for at least 60 cumulative seconds (59.0 for float leniency)
                 mins = dur / 60.0
                 acc_per_min[r] = round(rate_accidents[r] / mins, 2)
                 
@@ -144,13 +149,13 @@ class StatsTracker:
         avg_waits = {}
         for r, times in buckets.items():
             dur = rate_durations.get(r, 0)
-            if dur >= 60 and len(times) > 0: # Only show stats if run for at least 60 seconds
+            if dur >= 59.0 and len(times) > 0: # Only show stats if run for at least 60 seconds (59.0 for float leniency)
                 avg_waits[r] = sum(times) / len(times)
         return avg_waits
 
     def record_pedestrian_spawn(self, crossing_type, direction):
         self.pedestrian_spawns.append({
-            "time": time.time(),
+            "time": self.sim_time,
             "crossing_type": crossing_type,
             "direction": direction,
         })

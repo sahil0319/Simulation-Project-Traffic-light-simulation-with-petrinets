@@ -101,6 +101,15 @@ current_mode_idx = 0
 selected_pole = None
 slider_dragging = False
 tracker = None
+sim_time = 0.0
+speed_multiplier = 1
+
+# --- Auto ped-rate cycling ---
+PED_RATE_STEPS = [0, 15, 30, 45, 60, 75, 90, 105, 120]
+auto_cycle_on = True
+clear_on_cycle = True
+auto_cycle_timer = 0.0
+auto_cycle_idx = 2  # starts at 30 ppm
 
 # --- Pedestrian Spawn Rate Slider ---
 slider_x = 20
@@ -115,9 +124,16 @@ def init_game():
     """Initialize all game objects for a new simulation run."""
     global vehicle_manager, pedestrian_manager, police_manager, accident_manager
     global controller, metrics, modes, current_mode_idx, selected_pole, slider_dragging
-    global tracker
+    global tracker, sim_time, speed_multiplier
+    global auto_cycle_timer, auto_cycle_idx
+
+    sim_time = 0.0
+    speed_multiplier = 1
+    auto_cycle_timer = 0.0
+    auto_cycle_idx = 2  # 30 ppm
 
     tracker = StatsTracker()
+    tracker.sim_time = sim_time
     tracker.start()
 
     vehicle_manager = VehicleManager(road_info, stats_tracker=tracker)
@@ -291,15 +307,36 @@ def draw_ui():
     if modes[current_mode_idx].name == "Manual Survival":
         draw_controls_overlay()
 
+    # --- Speed indicator ---
+    spd_label = f"{speed_multiplier}x"
+    spd_color = WHITE if speed_multiplier == 1 else (100, 255, 100) if speed_multiplier == 2 else (255, 180, 60) if speed_multiplier == 4 else (255, 80, 80) if speed_multiplier == 8 else (200, 0, 200) if speed_multiplier == 16 else (0, 255, 255) if speed_multiplier == 32 else (255, 255, 0)
+    spd_txt = ui_font.render(f"Speed: {spd_label}  [1/2/3/4/5/6/7]", True, spd_color)
+    screen.blit(spd_txt, (W // 2 - spd_txt.get_width() // 2, H - 30))
+
+    # --- Auto-cycle indicator (auto mode) ---
+    if modes[current_mode_idx].name == "Automatic":
+        cyc_col = (100, 255, 100) if auto_cycle_on else (255, 80, 80)
+        cyc_txt = ui_font.render(f"Auto Ped Cycle: {'ON' if auto_cycle_on else 'OFF'}  [C]", True, cyc_col)
+        screen.blit(cyc_txt, (20, H - 95))
+        
+        clr_col = (100, 255, 100) if clear_on_cycle else (255, 80, 80)
+        clr_txt = ui_font.render(f"Clean Sweep on Cycle: {'ON' if clear_on_cycle else 'OFF'}  [L]", True, clr_col)
+        screen.blit(clr_txt, (20, H - 70))
+
     # ESC hint
     esc_txt = ui_font.render("[ESC] Back to Menu", True, (100, 100, 100))
-    screen.blit(esc_txt, (W - 240, H - 30))
+    screen.blit(esc_txt, (W - 240, H - 60))
 
 
 # --- Main Loop ---
 running = True
 while running:
-    dt = clock.tick(60) / 1000.0
+    raw_dt = clock.tick(60) / 1000.0
+    dt = raw_dt * speed_multiplier
+    # Update sim clock
+    if app_state == STATE_GAME and tracker:
+        sim_time += dt
+        tracker.sim_time = sim_time
     
     # =========================================================
     #  MENU STATE
@@ -366,6 +403,30 @@ while running:
                 if event.key == pygame.K_a:
                     accident_manager.trigger_accident(vehicle_manager, pedestrian_manager)
                 
+                # Speed multiplier: 1=1x, 2=2x, 3=4x, 4=8x, 5=16x, 6=32x, 7=64x
+                if event.key == pygame.K_1:
+                    speed_multiplier = 1
+                elif event.key == pygame.K_2:
+                    speed_multiplier = 2
+                elif event.key == pygame.K_3:
+                    speed_multiplier = 4
+                elif event.key == pygame.K_4:
+                    speed_multiplier = 8
+                elif event.key == pygame.K_5:
+                    speed_multiplier = 16
+                elif event.key == pygame.K_6:
+                    speed_multiplier = 32
+                elif event.key == pygame.K_7:
+                    speed_multiplier = 64
+                
+                # Toggle auto ped-rate cycling
+                if event.key == pygame.K_c:
+                    auto_cycle_on = not auto_cycle_on
+                
+                # Toggle clean sweep on cycle
+                if event.key == pygame.K_l:
+                    clear_on_cycle = not clear_on_cycle
+                
                 # Shift+> and Shift+< to adjust pedestrian spawn rate
                 if event.key == pygame.K_PERIOD and (event.mod & pygame.KMOD_SHIFT):
                     new_rate = min(slider_max, pedestrian_manager.spawn_rate_ppm + 15)
@@ -415,6 +476,23 @@ while running:
         # Update
         current_mode = modes[current_mode_idx]
         
+        # --- Auto ped-rate cycling (Automatic mode, every 600 sim-seconds / 10 mins) ---
+        if auto_cycle_on and current_mode.name == "Automatic":
+            auto_cycle_timer += dt
+            if auto_cycle_timer >= 600.0:
+                auto_cycle_timer -= 600.0
+                auto_cycle_idx = (auto_cycle_idx + 1) % len(PED_RATE_STEPS)
+                new_rate = PED_RATE_STEPS[auto_cycle_idx]
+                vehicle_manager.flush_wait_times()
+                tracker.record_ped_rate_change(new_rate)
+                pedestrian_manager.spawn_rate_ppm = new_rate
+                
+                if clear_on_cycle:
+                    vehicle_manager.vehicles = {"N": [], "S": [], "E": [], "W": []}
+                    pedestrian_manager.pedestrians = []
+                    accident_manager.accidents = []
+                    accident_manager.active_accident_count = 0
+        
         police_manager.update(dt)
         accident_manager.update(dt, vehicle_manager, pedestrian_manager)
         
@@ -431,7 +509,7 @@ while running:
         light_states = current_mode.get_light_states()
         pedestrian_manager.update(dt, light_states, police_manager.is_vip_active(), vehicle_manager.vehicles)
         
-        metrics.update(vehicle_manager, accident_manager)
+        metrics.update(dt, vehicle_manager, accident_manager)
         
         # Draw
         screen.fill(BG)
