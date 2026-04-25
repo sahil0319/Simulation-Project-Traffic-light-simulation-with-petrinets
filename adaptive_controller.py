@@ -69,8 +69,12 @@ class AdaptiveController:
         if fired:
             self.apply_states()
         
-        # 2. Scheduler & Overlap Logic
-        # Scan current states
+        # 2. Scheduler & Interlock Logic (German traffic light sequence)
+        # Correct sequence per direction:
+        #   Green -> Yellow -> RED (all-red interlock) -> Red-Yellow -> Green
+        # The next direction's RedYellow must NOT start until the current
+        # direction's Yellow has been fully consumed (all-red state).
+        
         green_dir = None
         yellow_dir = None
         ry_dir = None
@@ -86,38 +90,32 @@ class AdaptiveController:
         # Update active direction tracker
         if green_dir:
             self.active_direction = green_dir
-            
-        # Case A: Transition Overlap
-        # If we are in Yellow phase, and NO RedYellow phase is active, initiate the next phase.
-        # We also ensure NO Green is active (e.g. from a race condition or manual override).
+        
+        # When Yellow is active, remember which direction will need scheduling
+        # but do NOT start the next phase yet — wait for all-red.
         if yellow_dir and not ry_dir and not green_dir:
-            exclude_list = [yellow_dir]
-            best_dir = self.select_next_phase(vehicle_manager, exclude=exclude_list)
+            self._pending_schedule_exclude = [yellow_dir]
+        
+        # All-Red Interlock: schedule the next phase ONLY when every single
+        # place in the net is empty (all directions are Red).  This guarantees
+        # no two directions can ever have Green (or Green+Yellow) at the same time.
+        if not green_dir and not yellow_dir and not ry_dir:
+            exclude = getattr(self, "_pending_schedule_exclude", [])
+            best_dir = self.select_next_phase(vehicle_manager, exclude=exclude)
+            if not best_dir:
+                # If no candidates with exclusion, try without
+                best_dir = self.select_next_phase(vehicle_manager, exclude=[])
             
             if best_dir:
-                # Start Red-Yellow for next direction
-                p_ry = self.places[best_dir]["red_yellow"]
-                p_ry.add_token(1, current_time=self.net.current_time)
+                self.places[best_dir]["red_yellow"].add_token(1, current_time=self.net.current_time)
                 
-                # Setup Green duration for future
                 q_len, max_wait = vehicle_manager.get_lane_info(best_dir)
                 t_green = self.transitions[best_dir]["t_end_green"]
                 t_green.min_time = min(5 + q_len * 1.0, 15)
                 
                 self.apply_states()
-        
-        # Case B: Bootstrap / All Red / Recovery
-        # If system is empty (no Green, no Yellow, no RY), pick a lane.
-        elif not green_dir and not yellow_dir and not ry_dir:
-             best_dir = self.select_next_phase(vehicle_manager, exclude=[])
-             if best_dir:
-                 self.places[best_dir]["red_yellow"].add_token(1, current_time=self.net.current_time)
-                 
-                 q_len, max_wait = vehicle_manager.get_lane_info(best_dir)
-                 t_green = self.transitions[best_dir]["t_end_green"]
-                 t_green.min_time = min(5 + q_len * 1.0, 15)
-                 
-                 self.apply_states()
+            
+            self._pending_schedule_exclude = []
 
     def select_next_phase(self, vehicle_manager, exclude=[]):
         """Standard scheduler: Queue Length > Wait Time."""
