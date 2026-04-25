@@ -182,13 +182,10 @@ class StatsScreen:
 
         # Vehicle Wait Time vs Pedestrian Rate correlation
         wait_times_dict = tracker.get_avg_wait_time_by_rate()
-        formatted_waits = {f"{int(rate)} ppm": val for rate, val in wait_times_dict.items() if val > 0}
-        if formatted_waits:
-            y = self._bars_vertical(cs, y, "Avg Wait Time (sec) by Ped Rate", formatted_waits, ACCENT, is_float=True)
-        else:
-            warn = self.small_font.render("* Run simulation at a specific rate for 60 cumulative seconds to see Avg Wait Time data.", True, (255, 150, 150))
-            cs.blit(warn, (self.m + 10, y + 10))
-            y += 35
+        if wait_times_dict:
+            formatted_waits = {f"{int(rate)} ppm": val for rate, val in wait_times_dict.items() if val > 0}
+            if formatted_waits:
+                y = self._bars_vertical(cs, y, "Avg Wait Time (sec) by Ped Rate", formatted_waits, ACCENT, is_float=True)
 
         # IAT histogram for vehicles
         v_iats = tracker._inter_arrival_times(tracker.vehicle_spawns)
@@ -241,13 +238,11 @@ class StatsScreen:
 
         # Accident vs Pedestrian Rate correlation
         acc_per_min_dict = tracker.get_accidents_per_min_by_rate()
-        formatted_acc = {f"{int(rate)} ppm": val for rate, val in acc_per_min_dict.items() if val > 0}
-        if formatted_acc:
-            y = self._bars_vertical(cs, y, "Accidents per Minute by Ped Rate", formatted_acc, RED_ACC)
-        else:
-            warn = self.small_font.render("* Run simulation at a specific rate for 60 cumulative seconds to see Accident per Min data.", True, (255, 150, 150))
-            cs.blit(warn, (self.m + 10, y + 10))
-            y += 35
+        if acc_per_min_dict:
+            # Format keys for display
+            formatted_acc = {f"{int(rate)} ppm": val for rate, val in acc_per_min_dict.items() if val > 0}
+            if formatted_acc:
+                y = self._bars_vertical(cs, y, "Accidents per Minute by Ped Rate", formatted_acc, RED_ACC)
                 
         # ===== COLLISION MODEL MATH =====
         y = self._section(cs, y + 15, "Theoretical Collision Model", WHITE)
