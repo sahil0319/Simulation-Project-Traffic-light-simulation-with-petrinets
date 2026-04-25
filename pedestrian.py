@@ -348,10 +348,11 @@ class Pedestrian:
 
 
 class PedestrianManager:
-    def __init__(self, road_info, geometry=None):
+    def __init__(self, road_info, geometry=None, stats_tracker=None):
         self.pedestrians = []
         self.road_info = road_info
         self.spawn_rate_ppm = 30  # Persons per minute (default)
+        self.stats_tracker = stats_tracker
         
         # Use exponential distribution for spawn timer
         if self.spawn_rate_ppm > 0:
@@ -430,6 +431,9 @@ class PedestrianManager:
         
         new_ped = Pedestrian(crossing, direction, self.geometry)
         self.pedestrians.append(new_ped)
+
+        if self.stats_tracker:
+            self.stats_tracker.record_pedestrian_spawn(crossing, direction)
 
     def draw(self, surface):
         for p in self.pedestrians:

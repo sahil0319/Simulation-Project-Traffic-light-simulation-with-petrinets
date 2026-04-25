@@ -98,6 +98,10 @@ class Vehicle:
         self.preferred_gap = max(5, random.normalvariate(12, 4))  # Gap to car ahead
         self.stop_line_gap = max(5, random.normalvariate(8, 3))    # Gap to stop line
         
+        # Wait time tracking
+        self.wait_time = 0.0
+        self._wait_recorded = False
+        
         # Pick sprite
         available_colors = list(SPRITE_CACHE.get(self.type_name, {}).keys())
         if available_colors:
@@ -391,6 +395,9 @@ class Vehicle:
         if self.speed < 0: self.speed = 0
         if self.speed > self.max_speed * 1.2: self.speed = self.max_speed * 1.2
 
+        if self.speed < 5.0:
+            self.wait_time += dt
+
         # Move
         move_dist = self.speed * dt
         
@@ -416,7 +423,7 @@ class Vehicle:
 
 
 class VehicleManager:
-    def __init__(self, road_info):
+    def __init__(self, road_info, stats_tracker=None):
         self.vehicles = {
             "N": [], "S": [], "E": [], "W": []
         }
@@ -424,7 +431,18 @@ class VehicleManager:
         self.spawn_timer = 0.5 # Start fast
         self.next_id = 0
         self.blocked_directions = []  # Directions blocked by VIP/police
+        self.stats_tracker = stats_tracker
         self.vip_info = None           # VIP convoy position info for lane clearing
+
+    def flush_wait_times(self):
+        """Flush and reset wait times for all currently active vehicles to properly attribute them to the current rate."""
+        if not self.stats_tracker: return
+        current_rate = self.stats_tracker.current_ped_rate
+        for lane in self.vehicles.values():
+            for v in lane:
+                if v.wait_time > 0:
+                    self.stats_tracker.record_vehicle_wait(v.wait_time, current_rate)
+                    v.wait_time = 0.0
 
     def get_lane_info(self, direction):
         """Returns (queue_length, max_wait_time) for the given lane."""
@@ -511,6 +529,12 @@ class VehicleManager:
                 # W=1000, H=700
                 if -200 < vehicle.x < 1200 and -200 < vehicle.y < 900:
                     active_vehicles.append(vehicle)
+                else:
+                    # Vehicle exited simulation, record its wait time
+                    if not vehicle._wait_recorded and self.stats_tracker:
+                        current_ped_rate = self.stats_tracker.current_ped_rate
+                        self.stats_tracker.record_vehicle_wait(vehicle.wait_time, current_ped_rate)
+                        vehicle._wait_recorded = True
             
             self.vehicles[direction] = active_vehicles
 
@@ -556,6 +580,11 @@ class VehicleManager:
         new_vehicle = Vehicle(self.next_id, direction, self.road_info, is_ambulance)
         self.vehicles[direction].append(new_vehicle)
         self.next_id += 1
+
+        # Record stats
+        if self.stats_tracker:
+            self.stats_tracker.record_vehicle_spawn(new_vehicle.type_name, direction, is_ambulance)
+            self.stats_tracker.record_vehicle_gaps(new_vehicle.preferred_gap, new_vehicle.stop_line_gap)
 
     def draw(self, surface):
         for lane in self.vehicles.values():

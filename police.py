@@ -806,12 +806,13 @@ class VIPConvoy:
 class PoliceManager:
     """Manages all police vehicles and VIP convoys."""
     
-    def __init__(self, road_info, geometry):
+    def __init__(self, road_info, geometry, stats_tracker=None):
         self.road_info = road_info
         self.geometry = geometry
         self.convoys = []
         self.vip_spawn_timer = random.expovariate(1.0 / 45.0)  # Average 45s between spawns
         self.vip_active = False
+        self.stats_tracker = stats_tracker
         
     def set_geometry(self, cx, cy, road_width, cross_size, screen_width=1000, screen_height=700):
         self.geometry = {
@@ -834,6 +835,9 @@ class PoliceManager:
         convoy = VIPConvoy(approach, self.road_info, self.geometry)
         self.convoys.append(convoy)
         self.vip_active = True
+
+        if self.stats_tracker:
+            self.stats_tracker.record_vip_spawn(approach)
     
     def update(self, dt):
         # Timer for random VIP spawns
