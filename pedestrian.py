@@ -313,18 +313,25 @@ class Pedestrian:
             
             # Use faster speed while crossing the road
             current_speed = self.crossing_speed if self.crossing else self.speed
+            step = current_speed * dt
             
-            move_x = nx * current_speed * dt
-            move_y = ny * current_speed * dt
-            
-            # Add vehicle avoidance if crossing
-            if self.crossing and vehicles:
-                avoid_x, avoid_y = self._get_vehicle_avoidance(vehicles)
-                move_x += avoid_x * dt
-                move_y += avoid_y * dt
-            
-            self.x += move_x
-            self.y += move_y
+            if step >= dist:
+                # Snap to waypoint to avoid high-speed oscillation
+                self.x = target[0]
+                self.y = target[1]
+            else:
+                move_x = nx * step
+                move_y = ny * step
+                
+                # Add vehicle avoidance if crossing
+                if self.crossing and vehicles:
+                    avoid_x, avoid_y = self._get_vehicle_avoidance(vehicles)
+                    move_x += avoid_x * dt
+                    move_y += avoid_y * dt
+                
+                self.x += move_x
+                self.y += move_y
+                
             self.animation_offset += dt * 10
 
     def draw(self, surface):
@@ -403,14 +410,18 @@ class PedestrianManager:
         return crosswalks
 
     def update(self, dt, light_states, vip_active=False, all_vehicles=None):
+        # Handle case where rate changed from 0 to > 0
+        if self.spawn_timer == float('inf') and self.spawn_rate_ppm > 0:
+            self.spawn_timer = random.expovariate(self.spawn_rate_ppm / 60.0)
+            
         # Spawn new pedestrians
         self.spawn_timer -= dt
-        if self.spawn_timer <= 0:
+        while self.spawn_timer <= 0 and self.spawn_rate_ppm > 0:
             self.spawn_pedestrian()
-            if self.spawn_rate_ppm > 0:
-                self.spawn_timer = random.expovariate(self.spawn_rate_ppm / 60.0)
-            else:
-                self.spawn_timer = float('inf')
+            self.spawn_timer += random.expovariate(self.spawn_rate_ppm / 60.0)
+            
+        if self.spawn_rate_ppm == 0:
+            self.spawn_timer = float('inf')
         
         # Flatten vehicle dict to list for collision checks
         vehicles = []

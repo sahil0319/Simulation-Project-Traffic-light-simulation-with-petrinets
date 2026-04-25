@@ -328,7 +328,8 @@ class Vehicle:
                     target_speed = min(target_speed, (dist_to_line / 120) * self.max_speed)
         
         # Pedestrian crosswalk avoidance — stop before crosswalk if pedestrian is crossing
-        if active_crosswalks:
+        # Pedestrian crosswalk avoidance — stop before crosswalk if pedestrian is crossing in front of us
+        if active_crosswalks and not self.is_ambulance:
             for cw in active_crosswalks:
                 cw_rect = cw["rect"]
                 ped_x, ped_y = cw["pos"]
@@ -337,19 +338,19 @@ class Vehicle:
                 is_ahead = False
                 
                 if self.approach == "N":  # Moving down (+y)
-                    if cw["axis"] == "horizontal" and cw_rect.top > self.y:
+                    if cw["axis"] == "horizontal" and cw_rect.top > self.y and abs(self.x - ped_x) < 60:
                         dist_to_cw = cw_rect.top - self.y - self.length / 2
                         is_ahead = True
                 elif self.approach == "S":  # Moving up (-y)
-                    if cw["axis"] == "horizontal" and cw_rect.bottom < self.y:
+                    if cw["axis"] == "horizontal" and cw_rect.bottom < self.y and abs(self.x - ped_x) < 60:
                         dist_to_cw = self.y - cw_rect.bottom - self.length / 2
                         is_ahead = True
                 elif self.approach == "E":  # Moving left (-x)
-                    if cw["axis"] == "vertical" and cw_rect.right < self.x:
+                    if cw["axis"] == "vertical" and cw_rect.right < self.x and abs(self.y - ped_y) < 60:
                         dist_to_cw = self.x - cw_rect.right - self.length / 2
                         is_ahead = True
                 elif self.approach == "W":  # Moving right (+x)
-                    if cw["axis"] == "vertical" and cw_rect.left > self.x:
+                    if cw["axis"] == "vertical" and cw_rect.left > self.x and abs(self.y - ped_y) < 60:
                         dist_to_cw = cw_rect.left - self.x - self.length / 2
                         is_ahead = True
                 
@@ -400,6 +401,18 @@ class Vehicle:
 
         # Move
         move_dist = self.speed * dt
+        
+        if vehicle_ahead:
+            lat_dist = abs(self.x - vehicle_ahead.x) if self.approach in ["N", "S"] else abs(self.y - vehicle_ahead.y)
+            if lat_dist < 40: # Same lane
+                d = 0
+                if self.approach == "N": d = vehicle_ahead.y - self.y - (self.length/2 + vehicle_ahead.length/2)
+                elif self.approach == "S": d = self.y - vehicle_ahead.y - (self.length/2 + vehicle_ahead.length/2)
+                elif self.approach == "E": d = self.x - vehicle_ahead.x - (self.length/2 + vehicle_ahead.length/2)
+                elif self.approach == "W": d = vehicle_ahead.x - self.x - (self.length/2 + vehicle_ahead.length/2)
+                
+                if d > 0:
+                    move_dist = min(move_dist, max(0, d - 2))
         
         if self.approach == "N": self.y += move_dist
         elif self.approach == "S": self.y -= move_dist
@@ -476,7 +489,7 @@ class VehicleManager:
     
     def update(self, dt, light_states, active_crosswalks=None):
         self.spawn_timer -= dt
-        if self.spawn_timer <= 0:
+        while self.spawn_timer <= 0:
             # Don't spawn in blocked directions
             available = [d for d in ["N", "S", "E", "W"] if d not in self.blocked_directions]
             if available:
@@ -486,7 +499,7 @@ class VehicleManager:
                 is_ambulance = random.random() < 0.1
                 
                 self.spawn_vehicle(direction, is_ambulance)
-            self.spawn_timer = random.uniform(1.2, 3.0)
+            self.spawn_timer += random.uniform(1.2, 3.0)
 
         for direction, lane_vehicles in self.vehicles.items():
             stop_line = self.road_info["stop_lines"][direction]

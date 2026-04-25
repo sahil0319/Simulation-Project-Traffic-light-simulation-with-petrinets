@@ -477,10 +477,19 @@ class AccidentAmbulance:
                 self.state = "at_scene"
                 self.speed = 0; self.at_scene_timer = 0; return
             self.speed = max(30, self.max_speed * min(1, dist / 120))
-            nx = (self.target_x - self.x) / dist
-            ny = (self.target_y - self.y) / dist
-            self.x += nx * self.speed * dt
-            self.y += ny * self.speed * dt
+            
+            step = self.speed * dt
+            if step >= dist - 35:
+                # Snap to scene to prevent high-speed overshoot oscillation
+                self.x = self.target_x
+                self.y = self.target_y
+                self.state = "at_scene"
+                self.speed = 0; self.at_scene_timer = 0; return
+            else:
+                nx = (self.target_x - self.x) / dist
+                ny = (self.target_y - self.y) / dist
+                self.x += nx * step
+                self.y += ny * step
         elif self.state == "at_scene":
             self.at_scene_timer += dt
             if self.at_scene_timer >= LOADING_DURATION:
@@ -1034,6 +1043,7 @@ class AccidentManager:
                             collision_type=collision_type,
                             real_vehicles=real_vehicles,
                             real_pedestrian=real_pedestrian)
+        accident._spawn_ped_rate = pedestrian_manager.spawn_rate_ppm if pedestrian_manager else 0
         self.accidents.append(accident)
         self.next_id += 1
         self.total_accidents += 1
@@ -1043,7 +1053,7 @@ class AccidentManager:
     def update(self, dt, vehicle_manager=None, pedestrian_manager=None):
         self.spawn_timer -= dt
         self._ped_manager = pedestrian_manager  # keep ref for spawn rate
-        if self.spawn_timer <= 0:
+        while self.spawn_timer <= 0:
             active = sum(1 for a in self.accidents if a.active)
             if active < 5:
                 self.trigger_accident(vehicle_manager, pedestrian_manager)
@@ -1055,7 +1065,7 @@ class AccidentManager:
             # Convert to rate per second for expovariate
             rate_per_sec = rate_per_min / 60.0
             
-            self.spawn_timer = random.expovariate(rate_per_sec)
+            self.spawn_timer += random.expovariate(rate_per_sec)
 
         for accident in self.accidents:
             accident.update(dt)
@@ -1064,9 +1074,7 @@ class AccidentManager:
                 self.total_fatalities += accident.num_victims
                 accident._fatalities_counted = True
                 if self.stats_tracker:
-                    ped_rate = 0
-                    if self._ped_manager:
-                        ped_rate = self._ped_manager.spawn_rate_ppm
+                    ped_rate = getattr(accident, '_spawn_ped_rate', 0)
                     self.stats_tracker.record_accident(
                         accident.collision_type, accident.direction,
                         accident.num_victims, ped_spawn_rate=ped_rate

@@ -175,6 +175,14 @@ class StatsScreen:
     def draw(self, surface, tracker):
         tid = id(tracker)
         if self._cached_surface is None or self._cached_tracker_id != tid:
+            # Show loading screen immediately so it doesn't look frozen
+            surface.fill(BG)
+            loading_txt = self.title_font.render("Generating Charts & Statistics...", True, WHITE)
+            surface.blit(loading_txt, loading_txt.get_rect(center=(self.w // 2, self.h // 2)))
+            hint_txt = self.small_font.render("Please wait a moment...", True, DARK_GRAY)
+            surface.blit(hint_txt, hint_txt.get_rect(center=(self.w // 2, self.h // 2 + 40)))
+            pygame.display.flip()
+            
             self._cached_surface = self._render_full(tracker)
             self._cached_tracker_id = tid
 
@@ -243,7 +251,7 @@ class StatsScreen:
         # Wait time by rate
         wait_dict = tracker.get_avg_wait_time_by_rate()
         if wait_dict:
-            fmt = {f"{int(r)} ppm": val for r, val in wait_dict.items() if val > 0}
+            fmt = {f"{int(r)} ppm": val for r, val in wait_dict.items()}
             if fmt:
                 parts.append(self._mpl_bar_v("Avg Wait Time (sec) by Ped Rate", fmt, ACCENT))
 
@@ -297,7 +305,7 @@ class StatsScreen:
 
         acc_per_min = tracker.get_accidents_per_min_by_rate()
         if acc_per_min:
-            fmt_acc = {f"{int(r)} ppm": val for r, val in acc_per_min.items() if val > 0}
+            fmt_acc = {f"{int(r)} ppm": val for r, val in acc_per_min.items()}
             if fmt_acc:
                 parts.append(self._mpl_bar_v("Accidents per Minute by Ped Rate", fmt_acc, RED_ACC))
 
@@ -405,8 +413,12 @@ class StatsScreen:
     def _mpl_bar_v(self, title, freq, color):
         """Vertical bar chart."""
         with plt.rc_context(MPL_RC):
-            labels = list(freq.keys())
-            vals = list(freq.values())
+            try:
+                sorted_items = sorted(freq.items(), key=lambda kv: float(str(kv[0]).replace(' ppm', '')))
+            except:
+                sorted_items = sorted(freq.items(), key=lambda kv: kv[0])
+            labels = [str(k) for k, v in sorted_items]
+            vals = [v for k, v in sorted_items]
             fig, ax = plt.subplots(figsize=(self._chart_w_inches, 2.5))
             bars = ax.bar(labels, vals, color=_c01(color), edgecolor=_c01(color), width=0.5)
             ax.set_title(title, fontsize=13, pad=8)
