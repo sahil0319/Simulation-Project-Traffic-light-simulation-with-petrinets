@@ -18,7 +18,12 @@ PHASE_CLEARING = "clearing"
 PHASE_DONE = "done"
 
 # --- Constants ---
-MEAN_ACCIDENT_INTERVAL = 60.0
+# Theoretical collision model constants
+P_HIT = 0.20             # Base probability of crash given simultaneous occupancy
+S_C = 0.036              # Car crossing time (minutes)
+S_P = 0.081              # Ped crossing time (minutes)
+LAMBDA_C = 28.5          # Average car spawn rate (cars/min)
+BASELINE_RATE_P_MIN = 1.0 # 1 accident per min without peds
 COLLISION_DURATION = 0.9          # Animation time for collision
 DISPATCH_DELAY = 1.5
 LOADING_DURATION = 4.0
@@ -625,18 +630,24 @@ class Accident:
                 img2 = real_vehicles[1].original_image
                 dir2 = real_vehicles[1].approach
 
-            # Compute start positions (behind impact point)
-            s1x, s1y = self.x, self.y
-            s2x, s2y = self.x, self.y
-            if dir1 == "N": s1y -= approach_dist
-            elif dir1 == "S": s1y += approach_dist
-            elif dir1 == "E": s1x += approach_dist
-            elif dir1 == "W": s1x -= approach_dist
-            if dir2 == "N": s2y -= approach_dist
-            elif dir2 == "S": s2y += approach_dist
-            elif dir2 == "E": s2x += approach_dist
-            elif dir2 == "W": s2x -= approach_dist
-
+            # Compute start positions (actual positions if available, else offset)
+            if real_vehicles and len(real_vehicles) >= 1:
+                s1x, s1y = real_vehicles[0].x, real_vehicles[0].y
+            else:
+                s1x, s1y = self.x, self.y
+                if dir1 == "N": s1y -= approach_dist
+                elif dir1 == "S": s1y += approach_dist
+                elif dir1 == "E": s1x += approach_dist
+                elif dir1 == "W": s1x -= approach_dist
+                
+            if real_vehicles and len(real_vehicles) >= 2:
+                s2x, s2y = real_vehicles[1].x, real_vehicles[1].y
+            else:
+                s2x, s2y = self.x, self.y
+                if dir2 == "N": s2y -= approach_dist
+                elif dir2 == "S": s2y += approach_dist
+                elif dir2 == "E": s2x += approach_dist
+                elif dir2 == "W": s2x -= approach_dist
             # Post-crash angles
             pc1 = random.uniform(-40, 40)
             pc2 = random.uniform(-40, 40)
@@ -659,11 +670,14 @@ class Accident:
             else:
                 dir1 = self.direction
 
-            s1x, s1y = self.x, self.y
-            if dir1 == "N": s1y -= approach_dist
-            elif dir1 == "S": s1y += approach_dist
-            elif dir1 == "E": s1x += approach_dist
-            elif dir1 == "W": s1x -= approach_dist
+            if real_vehicles and len(real_vehicles) >= 1:
+                s1x, s1y = real_vehicles[0].x, real_vehicles[0].y
+            else:
+                s1x, s1y = self.x, self.y
+                if dir1 == "N": s1y -= approach_dist
+                elif dir1 == "S": s1y += approach_dist
+                elif dir1 == "E": s1x += approach_dist
+                elif dir1 == "W": s1x -= approach_dist
 
             pc1 = random.uniform(-25, 25)
             cs_car = CollisionSprite("vehicle", s1x, s1y, self.x, self.y, dir1,
@@ -953,15 +967,16 @@ class Accident:
 class AccidentManager:
     """Manages accident events. Can grab real vehicles/pedestrians for realistic crashes."""
 
-    def __init__(self, road_info, geometry):
+    def __init__(self, road_info, geometry, stats_tracker=None):
         self.road_info = road_info
         self.geometry = geometry
         self.accidents = []
         self.next_id = 0
-        self.spawn_timer = random.expovariate(1.0 / MEAN_ACCIDENT_INTERVAL)
+        self.spawn_timer = random.expovariate(BASELINE_RATE_P_MIN / 60.0)
         self.total_accidents = 0
         self.total_fatalities = 0
         self.active_accident_count = 0
+        self.stats_tracker = stats_tracker
 
     def trigger_accident(self, vehicle_manager=None, pedestrian_manager=None):
         """Trigger an accident, optionally grabbing real entities from the simulation."""
@@ -977,7 +992,7 @@ class AccidentManager:
                 ped = random.choice(crossing_peds)
                 # Find a vehicle near this pedestrian
                 all_v = [v for lane in vehicle_manager.vehicles.values() for v in lane]
-                near_vehicles = [v for v in all_v if math.hypot(v.x - ped.x, v.y - ped.y) < 200
+                near_vehicles = [v for v in all_v if math.hypot(v.x - ped.x, v.y - ped.y) < 500
                                  and not v.is_ambulance]
                 if near_vehicles:
                     chosen_v = min(near_vehicles, key=lambda v: math.hypot(v.x - ped.x, v.y - ped.y))
@@ -1027,11 +1042,20 @@ class AccidentManager:
 
     def update(self, dt, vehicle_manager=None, pedestrian_manager=None):
         self.spawn_timer -= dt
+        self._ped_manager = pedestrian_manager  # keep ref for spawn rate
         if self.spawn_timer <= 0:
             active = sum(1 for a in self.accidents if a.active)
-            if active < 2:
+            if active < 5:
                 self.trigger_accident(vehicle_manager, pedestrian_manager)
-            self.spawn_timer = random.expovariate(1.0 / MEAN_ACCIDENT_INTERVAL)
+            
+            # Recalculate dynamic accident rate based on queuing model
+            lambda_p = self._ped_manager.spawn_rate_ppm if self._ped_manager else 0
+            # Accident rate per minute = baseline + (p_hit * lambda_c * lambda_p * s_c * s_p)
+            rate_per_min = BASELINE_RATE_P_MIN + (P_HIT * LAMBDA_C * lambda_p * S_C * S_P)
+            # Convert to rate per second for expovariate
+            rate_per_sec = rate_per_min / 60.0
+            
+            self.spawn_timer = random.expovariate(rate_per_sec)
 
         for accident in self.accidents:
             accident.update(dt)
@@ -1039,6 +1063,14 @@ class AccidentManager:
             if not accident._fatalities_counted and accident.num_victims > 0:
                 self.total_fatalities += accident.num_victims
                 accident._fatalities_counted = True
+                if self.stats_tracker:
+                    ped_rate = 0
+                    if self._ped_manager:
+                        ped_rate = self._ped_manager.spawn_rate_ppm
+                    self.stats_tracker.record_accident(
+                        accident.collision_type, accident.direction,
+                        accident.num_victims, ped_spawn_rate=ped_rate
+                    )
 
         self.accidents = [a for a in self.accidents if a.active]
         self.active_accident_count = len(self.accidents)
@@ -1052,10 +1084,3 @@ class AccidentManager:
     def draw(self, surface):
         for a in self.accidents:
             a.draw(surface)
-        if self.total_accidents > 0:
-            f = pygame.font.Font(None, 20)
-            txt = f.render(f"Accidents: {self.total_accidents}  Deaths: {self.total_fatalities}",
-                           True, (255, 100, 100))
-            tr = txt.get_rect(topright=(self.geometry.get("screen_width", 1000) - 15, 50))
-            bg = pygame.Surface(tr.inflate(10, 6).size, pygame.SRCALPHA); bg.fill((0, 0, 0, 140))
-            surface.blit(bg, tr.inflate(10, 6)); surface.blit(txt, tr)

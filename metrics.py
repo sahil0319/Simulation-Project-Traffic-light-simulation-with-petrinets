@@ -35,12 +35,13 @@ class Metrics:
             self.active_accidents = accident_manager.active_accident_count
 
     def draw(self, surface, font):
-        # Draw overlay
         # Background — taller if we have accident stats
         panel_h = 140 if self.total_accidents > 0 else 110
-        bg_rect = pygame.Rect(10, 80, 240, panel_h)
-        pygame.draw.rect(surface, (0, 0, 0, 180), bg_rect, border_radius=8)
-        pygame.draw.rect(surface, (255, 255, 255), bg_rect, 2, border_radius=8)
+        bg_rect = pygame.Rect(5, 75, 240, panel_h)
+        bg_surf = pygame.Surface(bg_rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(bg_surf, (0, 0, 0, 120), bg_surf.get_rect(), border_radius=8)
+        pygame.draw.rect(bg_surf, (255, 255, 255, 100), bg_surf.get_rect(), 2, border_radius=8)
+        surface.blit(bg_surf, bg_rect.topleft)
         
         # Text
         elapsed = (pygame.time.get_ticks() - self.start_time) / 1000.0
@@ -56,8 +57,8 @@ class Metrics:
             if self.active_accidents > 0:
                 lines.append((f"Active Accidents: {self.active_accidents}", (255, 80, 80)))
         
-        y = 90
+        y = 85
         for line_text, color in lines:
             txt = font.render(line_text, True, color)
-            surface.blit(txt, (20, y))
+            surface.blit(txt, (15, y))
             y += 25

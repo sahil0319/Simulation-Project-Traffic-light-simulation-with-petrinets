@@ -106,21 +106,21 @@ class ManualSurvivalMode(GameMode):
                     else:
                          self.controller.force_phase(direction)
 
-            # WASD navigation
-            if selected_pole is not None:
-                # 0: NW, 1: NE, 2: SW, 3: SE
-                if event.key == pygame.K_w: # Up
-                    if selected_pole == 2: return 0
-                    if selected_pole == 3: return 1
-                elif event.key == pygame.K_s: # Down
-                    if selected_pole == 0: return 2
-                    if selected_pole == 1: return 3
-                elif event.key == pygame.K_a: # Left
-                    if selected_pole == 1: return 0
-                    if selected_pole == 3: return 2
-                elif event.key == pygame.K_d: # Right
-                    if selected_pole == 0: return 1
-                    if selected_pole == 2: return 3
+            # WASD navigation — works even with no pole selected (defaults to 0)
+            cur = selected_pole if selected_pole is not None else 0
+            # 0: NW, 1: NE, 2: SW, 3: SE
+            if event.key == pygame.K_w:  # Up
+                if cur in (2, 3): return cur - 2
+                return cur  # already top row
+            elif event.key == pygame.K_s:  # Down
+                if cur in (0, 1): return cur + 2
+                return cur
+            elif event.key == pygame.K_a:  # Left
+                if cur in (1, 3): return cur - 1
+                return cur
+            elif event.key == pygame.K_d:  # Right
+                if cur in (0, 2): return cur + 1
+                return cur
 
         return selected_pole
 
