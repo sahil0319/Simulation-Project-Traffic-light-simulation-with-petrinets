@@ -310,25 +310,49 @@ def draw_ui():
     if modes[current_mode_idx].name == "Manual Survival":
         draw_controls_overlay()
 
-    # --- Speed indicator ---
+    # --- Settings & Info Overlay ---
+    overlay_texts = []
+    
+    # 1. Speed indicator
     spd_label = f"{speed_multiplier}x"
     spd_color = WHITE if speed_multiplier == 1 else (100, 255, 100) if speed_multiplier == 2 else (255, 180, 60) if speed_multiplier == 4 else (255, 80, 80) if speed_multiplier == 8 else (200, 0, 200) if speed_multiplier == 16 else (0, 255, 255) if speed_multiplier == 32 else (255, 255, 0)
-    spd_txt = ui_font.render(f"Speed: {spd_label}  [1/2/3/4/5/6/7]", True, spd_color)
-    screen.blit(spd_txt, (W // 2 - spd_txt.get_width() // 2, H - 30))
-
-    # --- Auto-cycle indicator (auto mode) ---
+    overlay_texts.append(ui_font.render(f"Speed: {spd_label}  [1-7]", True, spd_color))
+    
+    # 2. Auto-cycle indicators (auto mode)
     if modes[current_mode_idx].name == "Automatic":
         cyc_col = (100, 255, 100) if auto_cycle_on else (255, 80, 80)
-        cyc_txt = ui_font.render(f"Auto Ped Cycle: {'ON' if auto_cycle_on else 'OFF'}  [C]", True, cyc_col)
-        screen.blit(cyc_txt, (20, H - 95))
+        overlay_texts.append(ui_font.render(f"Auto Ped Cycle: {'ON' if auto_cycle_on else 'OFF'}  [C]", True, cyc_col))
         
         clr_col = (100, 255, 100) if clear_on_cycle else (255, 80, 80)
-        clr_txt = ui_font.render(f"Clean Sweep on Cycle: {'ON' if clear_on_cycle else 'OFF'}  [L]", True, clr_col)
-        screen.blit(clr_txt, (20, H - 70))
+        overlay_texts.append(ui_font.render(f"Clean Sweep on Cycle: {'ON' if clear_on_cycle else 'OFF'}  [L]", True, clr_col))
+        
+        if tracker:
+            warmup_col = (100, 255, 100) if tracker.warmup_enabled else (255, 80, 80)
+            overlay_texts.append(ui_font.render(f"Warm-Up Deletion (1m): {'ON' if tracker.warmup_enabled else 'OFF'}  [U]", True, warmup_col))
 
-    # ESC hint
-    esc_txt = ui_font.render("[ESC] Back to Menu", True, (100, 100, 100))
-    screen.blit(esc_txt, (W - 240, H - 60))
+    # 3. ESC hint
+    overlay_texts.append(ui_font.render("[ESC] Back to Menu", True, (150, 150, 150)))
+    
+    # Draw transparent background block
+    padding = 10
+    line_spacing = 4
+    block_w = max(t.get_width() for t in overlay_texts) + padding * 2
+    block_h = sum(t.get_height() for t in overlay_texts) + padding * 2 + (len(overlay_texts) - 1) * line_spacing
+    
+    # Position just above the bottom slider (slider starts around H-40, let's leave some margin)
+    block_x = 20
+    block_y = H - block_h - 50 
+    
+    bg_surf = pygame.Surface((block_w, block_h), pygame.SRCALPHA)
+    pygame.draw.rect(bg_surf, (20, 20, 25, 200), (0, 0, block_w, block_h), border_radius=6)
+    screen.blit(bg_surf, (block_x, block_y))
+    pygame.draw.rect(screen, (80, 80, 90), (block_x, block_y, block_w, block_h), 1, border_radius=6)
+    
+    # Blit texts
+    curr_y = block_y + padding
+    for t in overlay_texts:
+        screen.blit(t, (block_x + padding, curr_y))
+        curr_y += t.get_height() + line_spacing
 
 
 # --- Main Loop ---
@@ -432,6 +456,10 @@ while running:
                 # Toggle clean sweep on cycle
                 if event.key == pygame.K_l:
                     clear_on_cycle = not clear_on_cycle
+                
+                # Toggle warm-up period deletion
+                if event.key == pygame.K_u and tracker:
+                    tracker.warmup_enabled = not tracker.warmup_enabled
                 
                 # Shift+> and Shift+< to adjust pedestrian spawn rate
                 if event.key == pygame.K_PERIOD and (event.mod & pygame.KMOD_SHIFT):

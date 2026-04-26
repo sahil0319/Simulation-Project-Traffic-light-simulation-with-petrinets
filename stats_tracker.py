@@ -6,11 +6,17 @@ import statistics
 class StatsTracker:
     """Records all random events during a simulation run for statistical analysis."""
 
+    # Warm-up period (seconds) at the start of each rate interval.
+    # Data recorded during this window is discarded to eliminate
+    # initial-transient bias from the system starting empty.
+    WARMUP_DURATION = 60.0  # 1 minute
+
     def __init__(self):
         self.start_time = None
         self.end_time = None
         self.game_mode = ""
         self.sim_time = 0.0  # Updated externally each frame
+        self.warmup_enabled = True  # Can be toggled
 
         # Vehicle events: list of dicts
         self.vehicle_spawns = []        # {time, type, direction, is_ambulance}
@@ -67,7 +73,18 @@ class StatsTracker:
             "stop_line_gap": stop_line_gap,
         })
 
+    def _in_warmup(self):
+        """Return True if we are in the warm-up window of the current rate interval."""
+        if not self.warmup_enabled:
+            return False
+        if self.current_ped_rate_start is None:
+            return False
+        elapsed = self.sim_time - self.current_ped_rate_start
+        return elapsed < self.WARMUP_DURATION
+
     def record_vehicle_wait(self, wait_time, ped_rate):
+        if self._in_warmup():
+            return  # Discard warm-up transient data
         self.vehicle_wait_times.append({
             "wait_time": wait_time,
             "ped_rate": ped_rate
@@ -80,6 +97,8 @@ class StatsTracker:
         })
 
     def record_accident(self, collision_type, direction, fatalities=0, ped_spawn_rate=0):
+        if self._in_warmup():
+            return  # Discard warm-up transient data
         self.accident_spawns.append({
             "time": self.sim_time,
             "collision_type": collision_type,
@@ -102,14 +121,19 @@ class StatsTracker:
         self.current_ped_rate_start = now
 
     def _get_rate_durations(self):
+        """Return effective durations per rate, subtracting warm-up time."""
+        warmup = self.WARMUP_DURATION if self.warmup_enabled else 0
         rate_durations = {}
         for interval in self.ped_rate_intervals:
             r = interval["rate_ppm"]
-            rate_durations[r] = rate_durations.get(r, 0) + interval["duration"]
+            effective = max(0, interval["duration"] - warmup)
+            rate_durations[r] = rate_durations.get(r, 0) + effective
             
         if self.current_ped_rate_start is not None:
             r = self.current_ped_rate
-            rate_durations[r] = rate_durations.get(r, 0) + (self.sim_time - self.current_ped_rate_start)
+            raw = self.sim_time - self.current_ped_rate_start
+            effective = max(0, raw - warmup)
+            rate_durations[r] = rate_durations.get(r, 0) + effective
             
         return rate_durations
 
