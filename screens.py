@@ -454,17 +454,35 @@ class StatsScreen:
 
     def _mpl_timeline(self, events, start_time, duration):
         """Scatter-plot timeline of events."""
+        import random
+        # Subsample to prevent matplotlib from choking on 20h+ simulations
+        if len(events) > 5000:
+            events = random.sample(events, 5000)
+            title = "Event Timeline (Sampled 5000 events)"
+        else:
+            title = "Event Timeline"
+            
         with plt.rc_context(MPL_RC):
             fig, ax = plt.subplots(figsize=(self._chart_w_inches, 2.0))
             type_y = {"Vehicle": 1, "VIP": 2, "Accident": 3}
+            
+            # Group by type to vectorize scatter calls (massive speedup)
+            groups = {}
             for evt_time, evt_type, color in events:
                 t = evt_time - start_time
                 y = type_y.get(evt_type, 1)
-                ax.scatter(t, y, color=_c01(color), s=18, zorder=3, alpha=0.8)
+                if evt_type not in groups:
+                    groups[evt_type] = {"x": [], "y": [], "c": _c01(color)}
+                groups[evt_type]["x"].append(t)
+                groups[evt_type]["y"].append(y)
+                
+            for g in groups.values():
+                ax.scatter(g["x"], g["y"], color=g["c"], s=18, zorder=3, alpha=0.8)
+                
             ax.set_yticks([1, 2, 3])
             ax.set_yticklabels(["Vehicle", "VIP", "Accident"])
             ax.set_xlabel("Time (s)")
-            ax.set_title("Event Timeline", fontsize=13, pad=8)
+            ax.set_title(title, fontsize=13, pad=8)
             ax.set_xlim(0, max(duration, 1))
             ax.set_ylim(0.5, 3.5)
             ax.spines["top"].set_visible(False)
